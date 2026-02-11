@@ -38,7 +38,7 @@ setup(
         "dash-bootstrap-components>=1.0.0",
         "dash-ag-grid>=2.0.0",
         "dash-daq>=0.5.0",
-        "dash-mantine-components>=6.0.0",
+        "dash-mantine-components>=0.12.0",
     ],
     extras_require={
         "dev": [
