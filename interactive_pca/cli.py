@@ -63,8 +63,9 @@ def main(args=None):
         
         app.run(debug=parsed_args.dev, port=parsed_args.server_port)
         
-    except ImportError:
-        logging.error("App module not yet implemented. Please use the notebook directly.")
+    except ImportError as e:
+        logging.error(f"App module error: {e}")
+        logging.error("Please ensure all dependencies are installed: pip install -e .")
         sys.exit(1)
 
 

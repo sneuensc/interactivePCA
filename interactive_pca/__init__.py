@@ -31,6 +31,8 @@ from .data_loader import (
     merge_data,
 )
 
+from .app import create_app
+
 __all__ = [
     # Utils
     "is_notebook",
@@ -51,4 +53,6 @@ __all__ = [
     "load_lmiss",
     "load_frq",
     "merge_data",
+    # App
+    "create_app",
 ]
