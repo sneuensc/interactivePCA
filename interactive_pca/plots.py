@@ -496,3 +496,124 @@ def update_figure_selection_fast(selected_ids, fig, trace_map):
 def get_selected_ids(selection):
     """Extract selected IDs from selection dict."""
     return [p['customdata'] for p in selection['points'] if 'customdata' in p]
+
+
+def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=None, lon_col=None):
+    """
+    Create a geographical map scatter plot.
+    
+    Args:
+        df: DataFrame with data
+        group: Grouping variable
+        aesthetics_group: Dictionary with aesthetic settings
+        lat_col: Latitude column name
+        lon_col: Longitude column name
+    
+    Returns:
+        Plotly Figure object
+    """
+    if lat_col is None or lon_col is None or lat_col not in df.columns or lon_col not in df.columns:
+        # Return empty figure if coordinates not available
+        return go.Figure().add_annotation(
+            text="Geographic coordinates not available",
+            showarrow=False,
+            font={'size': 20}
+        )
+    
+    # Remove rows with missing coordinates
+    df_map = df.dropna(subset=[lat_col, lon_col])
+    
+    if df_map.empty:
+        return go.Figure().add_annotation(
+            text="No valid geographic coordinates found",
+            showarrow=False,
+            font={'size': 20}
+        )
+    
+    traces = []
+    
+    if group == 'none':
+        # Single group
+        trace = go.Scattergeo(
+            lat=df_map[lat_col],
+            lon=df_map[lon_col],
+            mode='markers',
+            marker=dict(
+                size=aesthetics_group['size'].get('default', 8),
+                color=aesthetics_group['color'].get('default', 'steelblue'),
+                opacity=aesthetics_group['opacity'].get('default', 0.7)
+            ),
+            text=df_map['id'],
+            customdata=df_map['id'],
+            hovertemplate='<b>ID:</b> %{customdata}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
+            name='Samples'
+        )
+        traces.append(trace)
+    elif df_map[group].dtype.kind in 'fi':
+        # Continuous variable - use color scale
+        trace = go.Scattergeo(
+            lat=df_map[lat_col],
+            lon=df_map[lon_col],
+            mode='markers',
+            marker=dict(
+                size=aesthetics_group['size'].get('default', 8),
+                color=df_map[group],
+                colorscale=aesthetics_group['color'].get('colorscale', 'Viridis'),
+                opacity=aesthetics_group['opacity'].get('default', 0.7),
+                colorbar=dict(title=group),
+                showscale=True
+            ),
+            text=df_map[group],
+            customdata=df_map['id'],
+            hovertemplate='<b>ID:</b> %{customdata}<br><b>' + group + ':</b> %{text:.2f}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
+            name=group
+        )
+        traces.append(trace)
+    else:
+        # Categorical variable - use colors for each group
+        for group_val in df_map[group].unique():
+            if pd.isna(group_val):
+                continue
+            
+            df_group = df_map[df_map[group] == group_val]
+            
+            color = aesthetics_group['color'].get(str(group_val), 'steelblue')
+            size = aesthetics_group['size'].get(str(group_val), 8)
+            opacity = aesthetics_group['opacity'].get(str(group_val), 0.7)
+            
+            trace = go.Scattergeo(
+                lat=df_group[lat_col],
+                lon=df_group[lon_col],
+                mode='markers',
+                marker=dict(
+                    size=size,
+                    color=color,
+                    opacity=opacity
+                ),
+                text=[str(group_val)] * len(df_group),
+                customdata=df_group['id'],
+                hovertemplate='<b>ID:</b> %{customdata}<br><b>' + group + ':</b> %{text}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
+                name=str(group_val)
+            )
+            traces.append(trace)
+    
+    fig = go.Figure(traces)
+    
+    fig.update_layout(
+        geo=dict(
+            projection_type='natural earth',
+            showland=True,
+            landcolor='rgb(243, 243, 243)',
+            coastlinecolor='rgb(204, 204, 204)',
+            showocean=True,
+            oceancolor='rgb(204, 229, 255)',
+            showcountries=True,
+            countrywidth=0.5
+        ),
+        title=f'Geographic Distribution (grouped by {group})',
+        height=700,
+        hovermode='closest',
+        template='plotly_white'
+    )
+    
+    return fig

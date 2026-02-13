@@ -25,20 +25,34 @@ def create_sample_data():
             pc5 = (i % 6) * 0.25 - 0.75
             f.write(f"sample{i+1:02d}\t{pc1:.4f}\t{pc2:.4f}\t{pc3:.4f}\t{pc4:.4f}\t{pc5:.4f}\n")
     
-    # Create test annotation file
+    # Create test annotation file with geographic coordinates
     anno_path = os.path.join(tmpdir, 'sample.anno')
     with open(anno_path, 'w') as f:
-        f.write("id\tPopulation\tRegion\tTime_BP\tLatitude\tLongitude\n")
+        f.write("id\tPopulation\tRegion\tLatitude\tLongitude\tTime_BP\n")
         populations = ['Pop_A', 'Pop_B', 'Pop_C', 'Pop_D']
         regions = ['Europe', 'Asia', 'Africa', 'Americas']
         
         for i in range(20):
             pop = populations[i % 4]
             region = regions[i % 4]
-            time = 1000 + (i * 200)
-            lat = 40 + (i % 10) * 3
-            lon = -10 + (i % 10) * 5
-            f.write(f"sample{i+1:02d}\t{pop}\t{region}\t{time}\t{lat:.2f}\t{lon:.2f}\n")
+            # Create realistic geographic coordinates
+            if region == 'Europe':
+                lat = 50 + (i % 3) * 5
+                lon = 10 + (i % 3) * 5
+            elif region == 'Asia':
+                lat = 40 + (i % 3) * 5
+                lon = 100 + (i % 3) * 5
+            elif region == 'Africa':
+                lat = -5 + (i % 3) * 10
+                lon = 20 + (i % 3) * 10
+            else:  # Americas
+                lat = 0 + (i % 3) * 10
+                lon = -80 + (i % 3) * 10
+            
+            # Add time values (years before present) - spread across different periods
+            time_bp = 500 + (i * 200) + ((i % 5) * 100)  # Range from ~500 to ~4500 BP
+            
+            f.write(f"sample{i+1:02d}\t{pop}\t{region}\t{lat:.2f}\t{lon:.2f}\t{time_bp}\n")
     
     print(f"✅ Created {eigenvec_path}")
     print(f"✅ Created {anno_path}")
@@ -68,13 +82,15 @@ if __name__ == '__main__':
     print("\n📊 Open your browser and navigate to:")
     print("    http://localhost:8050")
     print("\n✨ Features to check:")
-    print("    • Tabs displayed horizontally at the top")
-    print("    • PCA plot with colored groups")
-    print("    • Dropdown to change grouping variable")
-    print("    • Dropdown to change PC axes")
-    print("    • Interactive hover to see sample IDs")
-    print("    • Click Annotation tab to see data table")
-    print("    • Click Help tab to see command-line options")
+    print("    • PCA Tab: PCA plot (LEFT) + Geographic map (RIGHT)")
+    print("    •   - PCA plot: Interactive scatter with colored groups")
+    print("    •   - Map: Shows where samples were collected")
+    print("    •   - Change grouping variable (Population, Region)")
+    print("    •   - Change PC axes (PC1, PC2, PC3, etc.)")
+    print("    •   - Hover to see sample IDs")
+    print("    • Annotation Tab: Data table of all annotations")
+    print("    • Map Tab: Standalone map view (alternative view)")
+    print("    • Help Tab: Command-line options reference")
     print("\n⏹️  Press Ctrl+C to stop the server")
     print("="*60 + "\n")
     

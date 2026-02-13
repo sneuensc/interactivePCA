@@ -6,7 +6,7 @@ import logging
 import os
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State
 import plotly.express as px
 
 from .data_loader import (
@@ -14,7 +14,7 @@ from .data_loader import (
     load_imiss, load_lmiss, load_frq, merge_data
 )
 from .utils import strip_ansi
-from .plots import create_initial_pca_plot
+from .plots import create_initial_pca_plot, create_geographical_map
 
 
 def create_app(args):
@@ -123,19 +123,412 @@ def create_app(args):
     app.layout = layout_data['layout']
     tab_content_map = layout_data['tab_content_map']
     
-    # Register tab switching callback
-    @app.callback(
+    # Register tab switching callback using clientside callback for better performance
+    # This toggles visibility instead of replacing content
+    app.clientside_callback(
+        """
+        function(active_tab) {
+            // Hide all tab content divs
+            const tabs = ['pca_tab', 'annotation_tab', 'help_tab'];
+            tabs.forEach(function(tab) {
+                const el = document.getElementById(tab + '_content');
+                if (el) {
+                    el.style.display = (tab === active_tab) ? 'block' : 'none';
+                }
+            });
+            return window.dash_clientside.no_update;
+        }
+        """,
         Output('tabs-content', 'children'),
         Input('tabs', 'value')
     )
-    def render_tab_content(active_tab):
-        if active_tab in tab_content_map:
-            return tab_content_map[active_tab]
-        return html.Div("Tab not found")
+    
+    # Callback to update PCA annotation table based on selected rows in annotation table
+    @app.callback(
+        Output('pca-annotation-table', 'rowData'),
+        Output('pca-annotation-table', 'columnDefs'),
+        Input('annotation-table', 'selectedRows'),
+        prevent_initial_call=False
+    )
+    def update_pca_annotation_table(selected_rows):
+        logging.info(f"PCA annotation table callback triggered with {len(selected_rows) if selected_rows else 0} selected rows")
+        if not selected_rows:
+            logging.warning("No rows selected in annotation table")
+            return [], []
+        # Extract 'Abbreviation' field from selected rows
+        selected_columns = [row.get('Abbreviation') for row in selected_rows if row.get('Abbreviation')]
+        logging.info(f"Selected columns: {selected_columns}")
+        cols = [c for c in selected_columns if c in df.columns]
+        if not cols:
+            logging.warning(f"None of the selected columns found in df. Available columns: {df.columns.tolist()[:10]}")
+            return [], []
+        logging.info(f"Updating PCA annotation table with {len(cols)} columns: {cols}")
+        row_data = df[cols].to_dict('records')
+        column_defs = [
+            {
+                'headerName': '',
+                'checkboxSelection': True,
+                'headerCheckboxSelection': True,
+                'headerCheckboxSelectionFilteredOnly': True,
+                'width': 40,
+                'pinned': 'left'
+            }
+        ] + [
+            {'field': col, 'headerName': col, 'sortable': True, 'filter': True}
+            for col in cols
+        ]
+        return row_data, column_defs
+    
+    # Callback for PCA plot updates (PC axes and grouping)
+    @app.callback(
+        Output('pca-plot', 'figure'),
+        Input('dropdown-pc-x', 'value'),
+        Input('dropdown-pc-y', 'value'),
+        Input('dropdown-group', 'value'),
+        Input('marker-aesthetics-store', 'data')
+    )
+    def update_pca_plot(pc_x, pc_y, group, aesthetics_store):
+        aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
+        fig = create_initial_pca_plot(
+            df=df,
+            x_col=pc_x,
+            y_col=pc_y,
+            group=group,
+            aesthetics_group=aesthetics
+        )
+        fig.update_layout(
+            autosize=True,
+            margin=dict(l=50, r=20, t=40, b=40),
+            legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top')
+        )
+        return fig
+    
+    # Callback for map plot updates (grouping only)
+    @app.callback(
+        Output('pca-map-plot', 'figure'),
+        Input('dropdown-group', 'value'),
+        Input('marker-aesthetics-store', 'data')
+    )
+    def update_map_plot(group, aesthetics_store):
+        if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
+            return {}
+        aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
+        fig = create_geographical_map(
+            df=df,
+            group=group,
+            aesthetics_group=aesthetics,
+            lat_col=ANNOTATION_LAT,
+            lon_col=ANNOTATION_LONG
+        )
+        fig.update_layout(
+            autosize=True,
+            margin=dict(l=50, r=20, t=40, b=40),
+            legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top')
+        )
+        return fig
+    
+    # Callback for time histogram updates (grouping, mode, and selection)
+    @app.callback(
+        Output('time-histogram', 'figure'),
+        Input('dropdown-group', 'value'),
+        Input('time-viz-mode', 'value'),
+        Input('time-variable', 'value'),
+        Input('pca-plot', 'selectedData'),
+        Input('marker-aesthetics-store', 'data')
+    )
+    def update_time_histogram(group, viz_mode, time_variable, selected_data, aesthetics_store):
+        import plotly.graph_objects as go
+        import numpy as np
+        
+        if time_variable is None or time_variable not in df.columns:
+            return {}
+        
+        time_vals = df[time_variable].dropna()
+        if time_vals.empty:
+            return {}
+        
+        # Get selected IDs if any
+        selected_ids = []
+        if selected_data and 'points' in selected_data:
+            selected_ids = [point.get('customdata', [point.get('pointIndex')])[0] 
+                          if point.get('customdata') else point.get('pointIndex') 
+                          for point in selected_data['points']]
+        
+        fig = go.Figure()
+        
+        aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
+        default_color = aesthetics['color'].get('default', 'steelblue')
+        
+        if viz_mode == 'distribution':
+            # Simple histogram
+            fig.add_trace(go.Histogram(
+                x=time_vals, 
+                nbinsx=50, 
+                marker=dict(color=default_color),
+                name='All samples'
+            ))
+            fig.update_layout(
+                title=f"Distribution ({time_variable})",
+                xaxis_title=time_variable,
+                yaxis_title="Count",
+                showlegend=False,
+                autosize=True
+            )
+            
+        elif viz_mode == 'scatter':
+            # Scatter plot with jitter
+            np.random.seed(42)
+            jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
+            default_size = aesthetics['size'].get('default', 8)
+            default_opacity = aesthetics['opacity'].get('default', 0.7)
+            
+            if group != 'none' and group in df.columns:
+                group_vals = df.loc[time_vals.index, group]
+                if df[group].dtype.kind in 'fi':
+                    # Continuous variable - use colorscale
+                    colorscale = aesthetics['color'].get('colorscale', 'Viridis')
+                    fig.add_trace(go.Scatter(
+                        x=time_vals,
+                        y=jitter,
+                        mode='markers',
+                        marker=dict(
+                            color=group_vals,
+                            colorscale=colorscale,
+                            size=default_size,
+                            opacity=default_opacity,
+                            showscale=True,
+                            colorbar=dict(title=group)
+                        ),
+                        name='All samples'
+                    ))
+                else:
+                    # Categorical variable - use group colors
+                    color_map = aesthetics.get('color', {})
+                    size_map = aesthetics.get('size', {})
+                    opacity_map = aesthetics.get('opacity', {})
+                    
+                    colors = [color_map.get(str(val), default_color) for val in group_vals]
+                    sizes = [size_map.get(str(val), default_size) for val in group_vals]
+                    opacities = [opacity_map.get(str(val), default_opacity) for val in group_vals]
+                    
+                    fig.add_trace(go.Scatter(
+                        x=time_vals,
+                        y=jitter,
+                        mode='markers',
+                        marker=dict(color=colors, size=sizes, opacity=opacities),
+                        name='All samples'
+                    ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=time_vals,
+                    y=jitter,
+                    mode='markers',
+                    marker=dict(color=default_color, size=default_size, opacity=default_opacity),
+                    name='All samples'
+                ))
+            fig.update_layout(
+                title=f"Scatter ({time_variable})",
+                xaxis_title=time_variable,
+                yaxis_title="",
+                yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+                showlegend=False,
+                autosize=True
+            )
+            
+        elif viz_mode == 'overlay':
+            # Overlapping histograms: selected vs all
+            unselected_color = aesthetics['color'].get('unselected', 'lightgray')
+            selected_color = default_color
+            
+            if selected_ids and len(selected_ids) > 0:
+                # All samples (unselected style)
+                fig.add_trace(go.Histogram(
+                    x=time_vals,
+                    nbinsx=50,
+                    marker=dict(color=unselected_color, line=dict(color='gray', width=1)),
+                    name='All samples',
+                    opacity=0.6
+                ))
+                
+                # Selected samples (default style)
+                if 'id' in df.columns:
+                    selected_time = df[df['id'].isin(selected_ids)][time_variable].dropna()
+                else:
+                    selected_indices = [i for i in selected_ids if i < len(df)]
+                    selected_time = df.iloc[selected_indices][time_variable].dropna()
+                
+                if not selected_time.empty:
+                    fig.add_trace(go.Histogram(
+                        x=selected_time,
+                        nbinsx=50,
+                        marker=dict(color=selected_color, line=dict(color=selected_color, width=1)),
+                        name='Selected samples',
+                        opacity=0.8
+                    ))
+                
+                fig.update_layout(
+                    title=f"Distribution: Selected vs All ({time_variable})",
+                    xaxis_title=time_variable,
+                    yaxis_title="Count",
+                    barmode='overlay',
+                    showlegend=True,
+                    legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)'),
+                    autosize=True
+                )
+            else:
+                # No selection, show all
+                fig.add_trace(go.Histogram(
+                    x=time_vals,
+                    nbinsx=50,
+                    marker=dict(color=default_color),
+                    name='All samples'
+                ))
+                fig.update_layout(
+                    title=f"Distribution ({time_variable}) - Select points on PCA plot",
+                    xaxis_title=time_variable,
+                    yaxis_title="Count",
+                    showlegend=False,
+                    autosize=True
+                )
+        
+        fig.update_layout(
+            template='plotly_white',
+            margin=dict(l=50, r=20, t=40, b=40)
+        )
+        if time_variable == ANNOTATION_TIME:
+            fig.update_xaxes(autorange='reversed')
+        return fig
     
     # Register callbacks (would be imported from callbacks.py)
     # from .callbacks import register_callbacks
     # register_callbacks(app, df, pcs, ...)
+    
+    # Callback to open aesthetics modal
+    @app.callback(
+        Output('aesthetics-modal', 'is_open'),
+        [Input('open-aesthetics', 'n_clicks'), Input('cancel-aesthetics', 'n_clicks'), Input('save-aesthetics', 'n_clicks')],
+        [State('aesthetics-modal', 'is_open')],
+        prevent_initial_call=True
+    )
+    def toggle_aesthetics_modal(n_open, n_cancel, n_save, is_open):
+        """Toggle modal on open, cancel, or after save"""
+        if n_open or n_cancel or n_save:
+            return not is_open
+        return is_open
+    
+    # Callback to populate aesthetics table when modal opens or group changes
+    @app.callback(
+        Output('aesthetics-table-container', 'children'),
+        [Input('dropdown-group', 'value'), Input('marker-aesthetics-store', 'data')]
+    )
+    def update_aesthetics_table(group, aesthetics_store):
+        import dash_ag_grid as dag
+        
+        try:
+            logging.debug(f"update_aesthetics_table called with group={group}, aesthetics_store keys={list(aesthetics_store.keys()) if aesthetics_store else None}")
+            
+            if not group or aesthetics_store is None:
+                logging.warning(f"Missing group or aesthetics_store: group={group}, store={aesthetics_store}")
+                return html.Div("No data available", style={'color': '#999', 'padding': '12px'})
+            
+            aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
+            logging.debug(f"Got aesthetics for group {group}: keys={list(aesthetics.keys())}")
+            
+            rows = build_aesthetics_table_rows(group, df, aesthetics)
+            logging.debug(f"Built {len(rows)} table rows for group {group}")
+            
+            return dag.AgGrid(
+                id='aesthetics-edit-table',
+                rowData=rows,
+                columnDefs=[
+                    {
+                        'field': 'Group',
+                        'headerName': 'Group',
+                        'editable': False,
+                        'width': 120
+                    },
+                    {
+                        'field': 'Size',
+                        'headerName': 'Size',
+                        'editable': True,
+                        'width': 80,
+                        'singleClickEdit': True,
+                        'cellEditor': 'agSelectCellEditor',
+                        'cellEditorParams': {'values': [4, 6, 8, 10, 12, 14, 16, 18, 20]}
+                    },
+                    {
+                        'field': 'Symbol',
+                        'headerName': 'Symbol',
+                        'editable': True,
+                        'width': 120,
+                        'singleClickEdit': True,
+                        'cellEditor': 'agSelectCellEditor',
+                        'cellEditorParams': {'values': ['circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star']}
+                    },
+                    {
+                        'field': 'Opacity',
+                        'headerName': 'Opacity',
+                        'editable': True,
+                        'width': 90,
+                        'singleClickEdit': True,
+                        'cellEditor': 'agSelectCellEditor',
+                        'cellEditorParams': {'values': [0.2, 0.4, 0.6, 0.8, 1.0]}
+                    },
+                    {
+                        'field': 'Color',
+                        'headerName': 'Color',
+                        'editable': True,
+                        'width': 140,
+                        'singleClickEdit': True
+                    },
+                    {
+                        'field': 'Colorscale',
+                        'headerName': 'Colorscale',
+                        'editable': True,
+                        'width': 130,
+                        'singleClickEdit': True
+                    }
+                ],
+                defaultColDef={'flex': 1, 'minWidth': 80},
+                dashGridOptions={
+                    'rowSelection': 'single'
+                },
+                style={'height': '100%', 'width': '100%'}
+            )
+        except Exception as e:
+            logging.error(f"Error in update_aesthetics_table: {e}", exc_info=True)
+            return html.Div(
+                f"Error loading table: {str(e)}",
+                style={'color': '#cc0000', 'padding': '12px', 'fontFamily': 'monospace', 'fontSize': '11px'}
+            )
+    
+    
+    # Callback to save aesthetics when Save button is clicked
+    @app.callback(
+        Output('marker-aesthetics-store', 'data'),
+        [Input('save-aesthetics', 'n_clicks')],
+        [State('aesthetics-edit-table', 'rowData'), State('marker-aesthetics-store', 'data'), State('dropdown-group', 'value')],
+        prevent_initial_call=True
+    )
+    def save_aesthetics_edits(n_clicks, rows, aesthetics_store, group):
+        """Save aesthetics table edits to store when Save button is clicked"""
+        if not n_clicks or not rows or not aesthetics_store or not group:
+            raise dash.exceptions.PreventUpdate
+        
+        # Extract the aesthetics for the current group
+        if group not in aesthetics_store:
+            logging.warning(f"Group '{group}' not found in aesthetics store, using get_init_aesthetics")
+            group_aesthetics = get_init_aesthetics(args, group, df)
+        else:
+            group_aesthetics = aesthetics_store[group]
+        
+        # Apply the edited rows to the group's aesthetics
+        updated_group_aesthetics = apply_aesthetics_table_rows(rows, group_aesthetics)
+        
+        # Update the store with the modified group aesthetics
+        aesthetics_store[group] = updated_group_aesthetics
+        logging.info(f"Aesthetics saved for group '{group}': {updated_group_aesthetics}")
+        return aesthetics_store
     
     logging.info("Dash application created successfully")
     return app
@@ -191,6 +584,140 @@ def get_init_aesthetics(args, group, df):
     return aesthetics
 
 
+def _safe_float(val, fallback):
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def build_aesthetics_table_rows(group, df, aesthetics):
+    """Build row data for aesthetics editor table."""
+    default_size = aesthetics['size']['default']
+    default_opacity = aesthetics['opacity']['default']
+    default_symbol = aesthetics['symbol']['default']
+    default_color = aesthetics['color'].get('default')
+    default_colorscale = aesthetics['color'].get('colorscale')
+
+    def val_or_dash(value, default):
+        return '-' if value == default else value
+
+    rows = [
+        {
+            'Group': 'default',
+            'Size': default_size,
+            'Symbol': default_symbol,
+            'Opacity': default_opacity,
+            'Color': default_color,
+            'Colorscale': default_colorscale
+        },
+        {
+            'Group': 'unselected',
+            'Size': val_or_dash(aesthetics['size'].get('unselected', default_size), default_size),
+            'Symbol': val_or_dash(aesthetics['symbol'].get('unselected', default_symbol), default_symbol),
+            'Opacity': val_or_dash(aesthetics['opacity'].get('unselected', default_opacity), default_opacity),
+            'Color': val_or_dash(aesthetics['color'].get('unselected', default_color), default_color),
+            'Colorscale': '-'
+        }
+    ]
+
+    if group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi':
+        for g in df[group].dropna().unique():
+            rows.append({
+                'Group': str(g),
+                'Size': val_or_dash(aesthetics['size'].get(g, default_size), default_size),
+                'Symbol': val_or_dash(aesthetics['symbol'].get(g, default_symbol), default_symbol),
+                'Opacity': val_or_dash(aesthetics['opacity'].get(g, default_opacity), default_opacity),
+                'Color': val_or_dash(aesthetics['color'].get(g, default_color), default_color),
+                'Colorscale': '-'
+            })
+
+    return rows
+
+
+def apply_aesthetics_table_rows(rows, base_aesthetics):
+    """Apply table rows to aesthetics dict."""
+    try:
+        if not rows or not base_aesthetics:
+            logging.warning("apply_aesthetics_table_rows: missing rows or base_aesthetics")
+            return base_aesthetics
+
+        # Verify base_aesthetics has required keys
+        required_keys = ['size', 'opacity', 'symbol', 'symbol_map', 'color']
+        missing_keys = [k for k in required_keys if k not in base_aesthetics]
+        if missing_keys:
+            logging.error(f"apply_aesthetics_table_rows: base_aesthetics missing keys: {missing_keys}")
+            logging.error(f"base_aesthetics keys: {list(base_aesthetics.keys())}")
+            return base_aesthetics
+
+        default_row = next((r for r in rows if str(r.get('Group')) == 'default'), {})
+        unselected_row = next((r for r in rows if str(r.get('Group')) == 'unselected'), {})
+
+        default_size = _safe_float(default_row.get('Size'), base_aesthetics['size'].get('default', 8))
+        default_opacity = _safe_float(default_row.get('Opacity'), base_aesthetics['opacity'].get('default', 0.8))
+        default_symbol = default_row.get('Symbol') or base_aesthetics['symbol'].get('default', 'circle')
+        default_color = default_row.get('Color') or base_aesthetics['color'].get('default', '#1f77b4')
+        default_colorscale = default_row.get('Colorscale') or base_aesthetics['color'].get('colorscale')
+
+        updated = {
+            'size': dict(base_aesthetics['size']),
+            'opacity': dict(base_aesthetics['opacity']),
+            'symbol': dict(base_aesthetics['symbol']),
+            'symbol_map': dict(base_aesthetics['symbol_map']),
+            'color': dict(base_aesthetics['color'])
+        }
+
+        updated['size']['default'] = default_size
+        updated['opacity']['default'] = default_opacity
+        updated['symbol']['default'] = default_symbol
+        updated['color']['default'] = default_color
+        if default_colorscale:
+            updated['color']['colorscale'] = default_colorscale
+
+        # Unselected row
+        if unselected_row:
+            updated['size']['unselected'] = _safe_float(unselected_row.get('Size'), default_size) if unselected_row.get('Size') != '-' else default_size
+            updated['opacity']['unselected'] = _safe_float(unselected_row.get('Opacity'), default_opacity) if unselected_row.get('Opacity') != '-' else default_opacity
+            updated['symbol']['unselected'] = unselected_row.get('Symbol') if unselected_row.get('Symbol') not in (None, '-', '') else default_symbol
+            updated['color']['unselected'] = unselected_row.get('Color') if unselected_row.get('Color') not in (None, '-', '') else default_color
+
+        # Group rows
+        for r in rows:
+            group_key = r.get('Group')
+            if group_key in (None, 'default', 'unselected'):
+                continue
+            if r.get('Size') not in (None, '-', ''):
+                updated['size'][group_key] = _safe_float(r.get('Size'), default_size)
+            if r.get('Opacity') not in (None, '-', ''):
+                updated['opacity'][group_key] = _safe_float(r.get('Opacity'), default_opacity)
+            if r.get('Symbol') not in (None, '-', ''):
+                updated['symbol'][group_key] = r.get('Symbol')
+            if r.get('Color') not in (None, '-', ''):
+                updated['color'][group_key] = r.get('Color')
+
+        logging.debug(f"apply_aesthetics_table_rows succeeded, returning updated aesthetics")
+        return updated
+        
+    except Exception as e:
+        logging.error(f"Error in apply_aesthetics_table_rows: {e}", exc_info=True)
+        logging.error(f"Returning base_aesthetics unchanged due to error")
+        return base_aesthetics
+        if r.get('Symbol') not in (None, '-', ''):
+            updated['symbol'][group_key] = r.get('Symbol')
+        if r.get('Color') not in (None, '-', ''):
+            updated['color'][group_key] = r.get('Color')
+
+    return updated
+
+
+def get_aesthetics_for_group(args, group, df, store_data):
+    if not store_data:
+        return get_init_aesthetics(args, group, df)
+    if group in store_data:
+        return store_data[group]
+    return get_init_aesthetics(args, group, df)
+
+
 def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
                  annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
                  init_selected_ids, init_group, init_continuous, init_aesthetics,
@@ -223,11 +750,32 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
     # Build tab list
     tab_configs = []
     
+    # Determine annotation columns for table/checkboxes
+    annotation_columns = None
+    if annotation_desc is not None:
+        if 'Abbreviation' in annotation_desc.columns:
+            annotation_columns = annotation_desc['Abbreviation'].dropna().tolist()
+        else:
+            annotation_columns = [col for col in annotation_desc.columns]
+
+    # Determine continuous variables for time/continuous plot
+    continuous_columns = []
+    if annotation_desc is not None and 'Type' in annotation_desc.columns and 'Abbreviation' in annotation_desc.columns:
+        continuous_columns = annotation_desc.loc[
+            annotation_desc['Type'] == 'continuous',
+            'Abbreviation'
+        ].dropna().tolist()
+    # Include PCs as continuous variables
+    continuous_columns.extend([pc for pc in pcs if pc not in continuous_columns])
+
     # PCA tab (always present)
     tab_configs.append({
         'label': 'PCA',
         'value': 'pca_tab',
-        'content': create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT, df, init_aesthetics)
+        'content': create_pca_tab(
+            pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
+            df, init_aesthetics, ANNOTATION_LONG, annotation_columns, continuous_columns
+        )
     })
     
     # Annotation tab
@@ -235,7 +783,7 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
         tab_configs.append({
             'label': 'Annotation',
             'value': 'annotation_tab',
-            'content': create_annotation_tab(annotation_desc)
+            'content': create_annotation_tab(annotation_desc, annotation_columns, pcs)
         })
     
     # Help tab
@@ -244,15 +792,18 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
     tab_configs.append({
         'label': 'Help',
         'value': 'help_tab',
-        'content': html.Pre(
-            strip_ansi(parser.format_help()),
-            style={
-                'backgroundColor': '#f8f9fa',
-                'padding': '10px',
-                'fontFamily': 'monospace',
-                'fontSize': '14px',
-                'whiteSpace': 'pre-wrap'
-            }
+        'content': html.Div(
+            html.Pre(
+                strip_ansi(parser.format_help()),
+                style={
+                    'backgroundColor': '#f8f9fa',
+                    'padding': '10px',
+                    'fontFamily': 'monospace',
+                    'fontSize': '14px',
+                    'whiteSpace': 'pre-wrap'
+                }
+            ),
+            style={'height': '100%', 'overflow': 'auto'}
         )
     })
     
@@ -269,99 +820,546 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
         dcc.Store(id='trace-map', data={}),
         dcc.Store(id='trace-time', data={}),
         
-        # Header
+        # Header with tabs
         html.Div([
-            html.H1("interactivePCA", style={
-                'padding': '20px',
+            html.H2("interactivePCA", style={
+                'display': 'inline-block',
                 'margin': '0',
-                'backgroundColor': '#f8f9fa',
-                'borderBottom': '2px solid #dee2e6'
-            })
-        ]),
+                'marginRight': '30px',
+                'paddingLeft': '20px',
+                'lineHeight': '60px',
+                'fontSize': '24px',
+                'verticalAlign': 'bottom'
+            }),
+            html.Div(
+                dcc.Tabs(
+                    id='tabs',
+                    value='pca_tab',
+                    children=[
+                        dcc.Tab(
+                            label=config['label'],
+                            value=config['value'],
+                            style={'padding': '10px 18px', 'minWidth': '120px'},
+                            selected_style={'padding': '10px 18px', 'minWidth': '120px'}
+                        )
+                        for config in tab_configs
+                    ]
+                ),
+                style={
+                    'display': 'inline-block',
+                    'verticalAlign': 'bottom'
+                }
+            )
+        ], style={
+            'backgroundColor': '#f8f9fa',
+            'borderBottom': '2px solid #dee2e6',
+            'height': '60px',
+            'whiteSpace': 'nowrap'
+        }),
         
-        # Tabs
-        dcc.Tabs(
-            id='tabs',
-            value='pca_tab',
-            children=[dcc.Tab(label=config['label'], value=config['value']) for config in tab_configs],
+        # Tab content area - all tabs rendered, visibility toggled
+        html.Div(
+            id='tabs-content',
             style={
-                'borderBottom': '1px solid #dee2e6',
-                'padding': '0 20px'
-            }
-        ),
-        
-        # Tab content area (will be updated by callback)
-        html.Div(id='tabs-content', style={'padding': '20px'}, children=tab_configs[0]['content'])
-    ])
+                'padding': '20px',
+                'height': 'calc(100vh - 60px)',
+                'overflow': 'hidden',
+                'display': 'flex',
+                'flexDirection': 'column'
+            },
+            children=[
+                html.Div(
+                    id=f"{config['value']}_content",
+                    children=config['content'], 
+                    style={
+                        'display': 'block' if i == 0 else 'none',
+                        'height': '100%'
+                    }
+                )
+                for i, config in enumerate(tab_configs)
+            ]
+        )
+    ], style={'height': '100vh', 'display': 'flex', 'flexDirection': 'column'})
     
     return {'layout': layout, 'tab_content_map': tab_content_map}
 
 
-def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT, df, aesthetics):
-    """Create PCA tab layout."""
+def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
+                   df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None):
+    """Create PCA tab layout with map on the right and extra panels below."""
     # Generate initial PCA figure
     init_fig = create_initial_pca_plot(
         df=df,
-        x_col='PC1',
-        y_col='PC2',
+        x_col=pcs[0],
+        y_col=pcs[1],
         group=init_group,
         aesthetics_group=aesthetics
     )
     
-    return html.Div([
+    # Generate initial map figure (if coordinates available)
+    init_map_fig = None
+    if ANNOTATION_LAT is not None and ANNOTATION_LONG is not None:
+        init_map_fig = create_geographical_map(
+            df=df,
+            group=init_group,
+            aesthetics_group=aesthetics,
+            lat_col=ANNOTATION_LAT,
+            lon_col=ANNOTATION_LONG
+        )
+    
+    # Control dropdowns
+    control_section = html.Div([
         html.Div([
-            html.Label('Group by:'),
+            html.Button(
+                'Aesthetics',
+                id='open-aesthetics',
+                style={
+                    'marginRight': '10px',
+                    'padding': '6px 12px',
+                    'border': '1px solid #ccc',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#ffffff',
+                    'cursor': 'pointer'
+                }
+            ),
+        ], style={'marginBottom': '10px'}),
+        html.Div([
+            html.Label('Group by:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
             dcc.Dropdown(
                 id='dropdown-group',
                 options=[{'label': g, 'value': g} for g in dropdown_group_list],
                 value=init_group,
-                clearable=False
+                clearable=False,
+                style={'width': '250px'}
             ),
-        ], style={'width': '300px', 'marginBottom': '10px'}),
+        ], style={'marginBottom': '15px'}),
         
         html.Div([
-            html.Label('PC X:'),
+            html.Label('PC X:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
             dcc.Dropdown(
                 id='dropdown-pc-x',
                 options=[{'label': pc, 'value': pc} for pc in pcs],
-                value='PC1',
+                value=pcs[0],
                 clearable=False,
-                style={'width': '150px', 'display': 'inline-block', 'marginRight': '10px'}
+                style={'width': '120px', 'display': 'inline-block', 'marginRight': '20px'}
             ),
-            html.Label('PC Y:'),
+            html.Label('PC Y:', style={'marginRight': '10px', 'fontWeight': 'bold', 'display': 'inline-block'}),
             dcc.Dropdown(
                 id='dropdown-pc-y',
                 options=[{'label': pc, 'value': pc} for pc in pcs],
-                value='PC2',
+                value=pcs[1],
                 clearable=False,
-                style={'width': '150px', 'display': 'inline-block'}
+                style={'width': '120px', 'display': 'inline-block'}
             ),
-        ], style={'marginBottom': '10px'}),
-        
-        dcc.Graph(
-            id='pca-plot',
-            figure=init_fig,
-            style={'height': '700px'}
+        ], style={'marginBottom': '15px'}),
+    ], style={'marginBottom': '20px', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'})
+    
+    # PCA plot (left side)
+    pca_plot = dcc.Graph(
+        id='pca-plot',
+        figure=init_fig,
+        style={'height': '100%'}
+    )
+
+    # Time/continuous plot below PCA plot (inverse axis)
+    time_hist = html.Div()
+    continuous_columns = continuous_columns or []
+    default_continuous = ANNOTATION_TIME if ANNOTATION_TIME in continuous_columns else (continuous_columns[0] if continuous_columns else None)
+    if default_continuous is not None and default_continuous in df.columns:
+        import plotly.graph_objects as go
+        time_vals = df[default_continuous].dropna()
+        if time_vals.empty:
+            time_hist = html.Div(
+                f"No valid values in {default_continuous} for distribution.",
+                style={'padding': '10px', 'color': '#666'}
+            )
+        else:
+            fig_time = go.Figure()
+            fig_time.add_trace(go.Histogram(x=time_vals, nbinsx=50, marker=dict(color='steelblue')))
+            fig_time.update_layout(
+                title=f"Distribution ({default_continuous})",
+                xaxis_title=default_continuous,
+                yaxis_title="Count",
+                height=250,
+                template='plotly_white'
+            )
+            if default_continuous == ANNOTATION_TIME:
+                fig_time.update_xaxes(autorange='reversed')
+            
+            time_hist = html.Div([
+                html.Div([
+                    html.Label('Variable:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                    dcc.Dropdown(
+                        id='time-variable',
+                        options=[{'label': c, 'value': c} for c in continuous_columns],
+                        value=default_continuous,
+                        clearable=False,
+                        style={'width': '200px', 'display': 'inline-block', 'marginRight': '15px'}
+                    ),
+                    html.Label('Visualization mode:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
+                    dcc.RadioItems(
+                        id='time-viz-mode',
+                        options=[
+                            {'label': 'Distribution', 'value': 'distribution'},
+                            {'label': 'Scatter (jittered)', 'value': 'scatter'},
+                            {'label': 'Selected vs All', 'value': 'overlay'}
+                        ],
+                        value='distribution',
+                        inline=True,
+                        inputStyle={'marginRight': '5px'},
+                        labelStyle={'marginRight': '15px'}
+                    )
+                ], style={
+                    'marginBottom': '10px',
+                    'padding': '8px',
+                    'backgroundColor': '#f8f9fa',
+                    'borderRadius': '3px',
+                    'flex': '0 0 auto'
+                }),
+                dcc.Graph(
+                    id='time-histogram',
+                    figure=fig_time,
+                    style={'flex': '1', 'minHeight': 0}
+                )
+            ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column', 'minHeight': 0})
+    else:
+        time_hist = html.Div(
+            "Time column not available for histogram."
+            if default_continuous is None else
+            f"Column '{default_continuous}' not found.",
+            style={'padding': '10px', 'color': '#666'}
         )
-    ])
+
+    pca_section = html.Div([
+        pca_plot,
+        time_hist
+    ], style={'flex': '1', 'minWidth': '400px', 'marginRight': '10px'})
+    
+    # Build left pane (PCA + Time Histogram) with horizontal split
+    left_pane = html.Div(
+        id='pca-left-container',
+        children=[
+            html.Div(
+                id='pca-plot-pane',
+                children=pca_plot,
+                style={
+                    'flex': '0 0 60%',
+                    'overflow': 'hidden',
+                    'position': 'relative',
+                    'display': 'flex',
+                    'flexDirection': 'column'
+                },
+                **{'data-pane': 'top'}
+            ),
+            html.Div(
+                id='pca-left-horizontal-resizer',
+                style={
+                    'height': '8px',
+                    'backgroundColor': '#bbb',
+                    'cursor': 'row-resize',
+                    'userSelect': 'none',
+                    'flex': '0 0 8px',
+                    'transition': 'background-color 0.2s'
+                },
+                title='Drag to resize'
+            ),
+            html.Div(
+                id='pca-time-pane',
+                children=time_hist,
+                style={
+                    'flex': '0 0 40%',
+                    'overflow': 'hidden',
+                    'display': 'flex',
+                    'flexDirection': 'column',
+                    'minHeight': '0'
+                },
+                **{'data-pane': 'bottom'}
+            )
+        ],
+        style={
+            'display': 'flex',
+            'flexDirection': 'column',
+            'gap': '0',
+            'flex': '1',
+            'minWidth': '350px',
+            'marginRight': '10px',
+            'height': '100%',
+            'minHeight': '0'
+        }
+    )
+    
+    # Map plot (right side) - if available
+    import dash_ag_grid as dag
+    if init_map_fig is not None:
+        # Build initial column list: annotation columns + PC columns
+        initial_columns = []
+        if annotation_columns:
+            initial_columns.extend(annotation_columns)
+        initial_columns.extend(pcs)
+        
+        # Select first 10 columns as default
+        default_table_columns = initial_columns[:10] if len(initial_columns) >= 10 else initial_columns
+        table_columns = [c for c in default_table_columns if c in df.columns]
+        table_data = df[table_columns].to_dict('records') if table_columns else []
+        column_defs = [
+            {
+                'headerName': '',
+                'checkboxSelection': True,
+                'headerCheckboxSelection': True,
+                'headerCheckboxSelectionFilteredOnly': True,
+                'width': 40,
+                'pinned': 'left'
+            }
+        ] + [
+            {'field': col, 'headerName': col, 'sortable': True, 'filter': True}
+            for col in table_columns
+        ]
+
+        map_plot = dcc.Graph(
+            id='pca-map-plot',
+            figure=init_map_fig,
+            style={'height': '100%'}
+        )
+
+        annotation_table = dag.AgGrid(
+            id='pca-annotation-table',
+            rowData=table_data,
+            columnDefs=column_defs,
+            defaultColDef={
+                'flex': 1,
+                'minWidth': 150,
+                'resizable': True,
+                'sortable': True,
+                'filter': True
+            },
+            dashGridOptions={
+                'rowSelection': 'multiple',
+                'pagination': True,
+                'paginationPageSize': 20,
+                'animateRows': False
+            },
+            style={'flex': '1', 'width': '100%'}
+        )
+
+        map_section = html.Div(
+            id='pca-right-container',
+            children=[
+                html.Div(
+                    id='pca-map-pane',
+                    children=map_plot,
+                    style={
+                        'flex': '0 0 60%',
+                        'overflow': 'hidden',
+                        'position': 'relative',
+                        'display': 'flex',
+                        'flexDirection': 'column'
+                    },
+                    **{'data-pane': 'top'}
+                ),
+                html.Div(
+                    id='pca-right-horizontal-resizer',
+                    style={
+                        'height': '8px',
+                        'backgroundColor': '#bbb',
+                        'cursor': 'row-resize',
+                        'userSelect': 'none',
+                        'flex': '0 0 8px',
+                        'transition': 'background-color 0.2s'
+                    },
+                    title='Drag to resize'
+                ),
+                html.Div(
+                    id='pca-table-pane',
+                    children=[
+                        html.H4("Annotation Table", style={'marginTop': '0', 'marginBottom': '10px'}),
+                        annotation_table
+                    ],
+                    style={
+                        'flex': '0 0 40%',
+                        'overflow': 'hidden',
+                        'display': 'flex',
+                        'flexDirection': 'column'
+                    },
+                    **{'data-pane': 'bottom'}
+                )
+            ],
+            style={
+                'display': 'flex',
+                'flexDirection': 'column',
+                'gap': '0',
+                'flex': '1',
+                'minWidth': '350px',
+                'height': '100%',
+                'minHeight': '0'
+            }
+        )
+    else:
+        # Only PCA plot (map unavailable); keep hidden table for callbacks
+        empty_table = dag.AgGrid(
+            id='pca-annotation-table',
+            rowData=[],
+            columnDefs=[],
+            defaultColDef={
+                'flex': 1,
+                'minWidth': 150,
+                'resizable': True,
+                'sortable': True,
+                'filter': True
+            },
+            dashGridOptions={
+                'pagination': True,
+                'paginationPageSize': 20,
+                'animateRows': False
+            },
+            style={'display': 'none'}
+        )
+        map_section = html.Div(empty_table, style={'display': 'none'})
+    
+    # Main container with vertical split pane
+    return html.Div([
+        control_section,
+        dbc.Modal(
+            [
+                dbc.ModalHeader(dbc.ModalTitle("Aesthetics Editor")),
+                dbc.ModalBody([
+                    html.P(
+                        "Edit values per group. Use '-' to keep default.",
+                        style={'color': '#666', 'marginBottom': '12px'}
+                    ),
+                    html.Div(
+                        id='aesthetics-table-container',
+                        style={
+                            'height': '300px',
+                            'maxHeight': '300px',
+                            'overflowY': 'auto',
+                            'border': '1px solid #ddd',
+                            'borderRadius': '4px'
+                        }
+                    )
+                ], style={'maxHeight': '70vh', 'overflowY': 'auto'}),
+                dbc.ModalFooter([
+                    html.Button(
+                        'Cancel',
+                        id='cancel-aesthetics',
+                        style={
+                            'padding': '8px 16px',
+                            'border': '1px solid #ccc',
+                            'borderRadius': '4px',
+                            'backgroundColor': '#ffffff',
+                            'cursor': 'pointer',
+                            'marginRight': '8px'
+                        }
+                    ),
+                    html.Button(
+                        'Save Changes',
+                        id='save-aesthetics',
+                        style={
+                            'padding': '8px 16px',
+                            'border': '1px solid #0066cc',
+                            'borderRadius': '4px',
+                            'backgroundColor': '#0066cc',
+                            'color': '#ffffff',
+                            'cursor': 'pointer'
+                        }
+                    )
+                ])
+            ],
+            id='aesthetics-modal',
+            is_open=False,
+            size='lg'
+        ),
+        html.Div(
+            id='pca-plots-container',
+            children=[
+                html.Div(
+                    id='pca-left-pane',
+                    children=left_pane,
+                    style={
+                        'flex': '0 0 50%',
+                        'minWidth': '350px',
+                        'overflow': 'hidden',
+                        'position': 'relative'
+                    },
+                    **{'data-pane': 'left'}
+                ),
+                html.Div(
+                    id='pca-vertical-resizer',
+                    style={
+                        'width': '8px',
+                        'backgroundColor': '#bbb',
+                        'cursor': 'col-resize',
+                        'userSelect': 'none',
+                        'flex': '0 0 8px',
+                        'transition': 'background-color 0.2s'
+                    },
+                    title='Drag to resize panes'
+                ),
+                html.Div(
+                    id='pca-right-pane',
+                    children=map_section,
+                    style={
+                        'flex': '0 0 50%',
+                        'minWidth': '350px',
+                        'overflow': 'hidden'
+                    },
+                    **{'data-pane': 'right'}
+                )
+            ],
+            style={
+                'display': 'flex',
+                'gap': '0',
+                'marginBottom': '0',
+                'flex': '1',
+                'minHeight': '0',
+                'height': '100%'
+            }
+        )
+    ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
 
 
-def create_annotation_tab(annotation_desc):
+def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
     """Create annotation tab layout."""
     import dash_ag_grid as dag
+    import pandas as pd
+    
+    # Extend annotation_desc with PC columns
+    if pcs:
+        pc_rows = pd.DataFrame({
+            'Abbreviation': pcs,
+            'Description': pcs,
+            'Type': ['continuous'] * len(pcs),
+            'N_levels': [None] * len(pcs),
+            'Dropdown': ['Yes'] * len(pcs)
+        })
+        annotation_desc_extended = pd.concat([annotation_desc, pc_rows], ignore_index=True)
+    else:
+        annotation_desc_extended = annotation_desc
     
     # Convert annotation_desc DataFrame to dict format for AG Grid
-    table_data = annotation_desc.to_dict('records')
+    table_data = annotation_desc_extended.to_dict('records')
     
-    # Define columns for the table
+    # Define columns for the table (dedicated checkbox selection as first column)
     column_defs = [
+        {
+            'headerName': '',
+            'checkboxSelection': True,
+            'headerCheckboxSelection': True,
+            'headerCheckboxSelectionFilteredOnly': True,
+            'width': 40,
+            'pinned': 'left'
+        }
+    ] + [
         {'field': col, 'headerName': col, 'sortable': True, 'filter': True}
-        for col in annotation_desc.columns
+        for col in annotation_desc_extended.columns
     ]
+    
+    # Select first 10 rows as default
+    row_indices_to_select = list(range(min(10, len(table_data))))
     
     return html.Div([
         html.H3("Annotation Description", style={'marginBottom': '20px'}),
-        html.P(f"Total annotation columns: {len(annotation_desc)}", style={'marginBottom': '20px'}),
+        html.P("Select rows to display those columns in the PCA tab annotation table", 
+               style={'color': '#666', 'marginBottom': '15px'}),
         
         dag.AgGrid(
             id='annotation-table',
@@ -375,13 +1373,15 @@ def create_annotation_tab(annotation_desc):
                 'filter': True
             },
             dashGridOptions={
+                'rowSelection': 'multiple',
                 'pagination': True,
                 'paginationPageSize': 20,
                 'animateRows': False
             },
-            style={'height': '600px', 'width': '100%'}
+            selectedRows=table_data[:10] if len(table_data) >= 10 else table_data,
+            style={'flex': '1', 'width': '100%'}
         )
-    ])
+    ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
 
 
 def create_eigenvalues_tab(eigenval, args):
