@@ -6,7 +6,7 @@ import logging
 import os
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output, State
+from dash import dcc, html, Input, Output, State, ALL
 import plotly.express as px
 
 from .data_loader import (
@@ -306,16 +306,18 @@ def create_app(args):
                     color_map = aesthetics.get('color', {})
                     size_map = aesthetics.get('size', {})
                     opacity_map = aesthetics.get('opacity', {})
+                    symbol_map = aesthetics.get('symbol', {})
                     
                     colors = [color_map.get(str(val), default_color) for val in group_vals]
                     sizes = [size_map.get(str(val), default_size) for val in group_vals]
                     opacities = [opacity_map.get(str(val), default_opacity) for val in group_vals]
+                    symbols = [symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle')) for val in group_vals]
                     
                     fig.add_trace(go.Scatter(
                         x=time_vals,
                         y=jitter,
                         mode='markers',
-                        marker=dict(color=colors, size=sizes, opacity=opacities),
+                        marker=dict(color=colors, size=sizes, opacity=opacities, symbol=symbols),
                         name='All samples'
                     ))
             else:
@@ -423,78 +425,177 @@ def create_app(args):
     )
     def update_aesthetics_table(group, aesthetics_store):
         import dash_ag_grid as dag
+        import dash_bootstrap_components as dbc
         
         try:
-            logging.debug(f"update_aesthetics_table called with group={group}, aesthetics_store keys={list(aesthetics_store.keys()) if aesthetics_store else None}")
+            logging.debug(f"update_aesthetics_table called with group={group}")
             
             if not group or aesthetics_store is None:
-                logging.warning(f"Missing group or aesthetics_store: group={group}, store={aesthetics_store}")
                 return html.Div("No data available", style={'color': '#999', 'padding': '12px'})
             
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
-            logging.debug(f"Got aesthetics for group {group}: keys={list(aesthetics.keys())}")
             
-            rows = build_aesthetics_table_rows(group, df, aesthetics)
-            logging.debug(f"Built {len(rows)} table rows for group {group}")
+            # Determine if group is continuous
+            is_continuous = group != 'none' and group in df.columns and df[group].dtype.kind in 'fi'
             
-            return dag.AgGrid(
+            # Always create colorscale dropdown (to avoid callback error), but hide for categorical
+            colorscale = aesthetics['color'].get('colorscale', 'Viridis')
+            colorscale_dropdown = dcc.Dropdown(
+                id='colorscale-dropdown-modal',
+                options=[{'label': cs, 'value': cs} for cs in ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Blues', 'Reds', 'Greens', 'YlOrRd', 'RdYlBu']],
+                value=colorscale,
+                clearable=False,
+                style={'width': '200px', 'display': 'none' if not is_continuous else 'block'}
+            )
+            
+            if is_continuous:
+                # Continuous: just show colorscale selector
+                return html.Div([
+                    html.Div("Select colorscale for continuous variable:", style={'marginBottom': '8px'}),
+                    colorscale_dropdown
+                ])
+            
+            # Categorical: build AG Grid table with editable colors
+            default_size = aesthetics['size']['default']
+            default_opacity = aesthetics['opacity']['default']
+            default_symbol = aesthetics['symbol']['default']
+            
+            # Build table rows
+            rows = []
+            
+            for key, color_val in aesthetics['color'].items():
+                size_val = aesthetics['size'].get(key, default_size)
+                opacity_val = aesthetics['opacity'].get(key, default_opacity)
+                symbol_val = aesthetics['symbol'].get(key, default_symbol)
+                
+                # Show "-" if equals default (except for "default" row itself)
+                size_display = "-" if (size_val == default_size and key != 'default') else size_val
+                opacity_display = "-" if (opacity_val == default_opacity and key != 'default') else opacity_val
+                symbol_display = "-" if (symbol_val == default_symbol and key != 'default') else symbol_val
+                
+                rows.append({
+                    'Group': key,
+                    'Size': size_display,
+                    'Opacity': opacity_display,
+                    'Symbol': symbol_display
+                })
+            
+            # Column definitions
+            columnDefs = [
+                {
+                    'field': 'Group',
+                    'headerName': 'Group',
+                    'editable': False,
+                    'width': 130,
+                    'pinned': 'left'
+                },
+                {
+                    'field': 'Size',
+                    'headerName': 'Size',
+                    'editable': True,
+                    'width': 90,
+                    'singleClickEdit': True,
+                    'cellEditor': 'agSelectCellEditor',
+                    'cellEditorParams': {'values': ['-', 4, 6, 8, 10, 12, 14, 16, 18, 20]}
+                },
+                {
+                    'field': 'Opacity',
+                    'headerName': 'Opacity',
+                    'editable': True,
+                    'width': 100,
+                    'singleClickEdit': True,
+                    'cellEditor': 'agSelectCellEditor',
+                    'cellEditorParams': {'values': ['-', 0.2, 0.4, 0.6, 0.8, 1.0]}
+                },
+                {
+                    'field': 'Symbol',
+                    'headerName': 'Symbol',
+                    'editable': True,
+                    'width': 150,
+                    'singleClickEdit': True,
+                    'cellEditor': 'agSelectCellEditor',
+                    'cellEditorParams': {'values': ['-', 'circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star']}
+                }
+            ]
+            
+            table = dag.AgGrid(
                 id='aesthetics-edit-table',
                 rowData=rows,
-                columnDefs=[
-                    {
-                        'field': 'Group',
-                        'headerName': 'Group',
-                        'editable': False,
-                        'width': 120
-                    },
-                    {
-                        'field': 'Size',
-                        'headerName': 'Size',
-                        'editable': True,
-                        'width': 80,
-                        'singleClickEdit': True,
-                        'cellEditor': 'agSelectCellEditor',
-                        'cellEditorParams': {'values': [4, 6, 8, 10, 12, 14, 16, 18, 20]}
-                    },
-                    {
-                        'field': 'Symbol',
-                        'headerName': 'Symbol',
-                        'editable': True,
-                        'width': 120,
-                        'singleClickEdit': True,
-                        'cellEditor': 'agSelectCellEditor',
-                        'cellEditorParams': {'values': ['circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star']}
-                    },
-                    {
-                        'field': 'Opacity',
-                        'headerName': 'Opacity',
-                        'editable': True,
-                        'width': 90,
-                        'singleClickEdit': True,
-                        'cellEditor': 'agSelectCellEditor',
-                        'cellEditorParams': {'values': [0.2, 0.4, 0.6, 0.8, 1.0]}
-                    },
-                    {
-                        'field': 'Color',
-                        'headerName': 'Color',
-                        'editable': True,
-                        'width': 140,
-                        'singleClickEdit': True
-                    },
-                    {
-                        'field': 'Colorscale',
-                        'headerName': 'Colorscale',
-                        'editable': True,
-                        'width': 130,
-                        'singleClickEdit': True
-                    }
-                ],
-                defaultColDef={'flex': 1, 'minWidth': 80},
-                dashGridOptions={
-                    'rowSelection': 'single'
-                },
-                style={'height': '100%', 'width': '100%'}
+                columnDefs=columnDefs,
+                defaultColDef={'flex': 1, 'minWidth': 80, 'resizable': True},
+                dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40},
+                style={'height': '350px', 'width': '100%'}
             )
+            
+            # Create color pickers aligned with table rows (including header)
+            color_picker_column = [
+                # Header
+                html.Div('Color', style={
+                    'height': '40px',
+                    'display': 'flex',
+                    'alignItems': 'center',
+                    'justifyContent': 'center',
+                    'fontWeight': 'bold',
+                    'fontSize': '14px',
+                    'borderBottom': '2px solid #dee2e6',
+                    'backgroundColor': '#f8f9fa'
+                })
+            ]
+            
+            # Color picker for each row
+            for key, color_val in aesthetics['color'].items():
+                color_picker_column.append(
+                    html.Div([
+                        dbc.Input(
+                            type="color",
+                            id={'type': 'color-input-modal', 'index': str(key)},
+                            value=color_val,
+                            style={
+                                'width': '40px',
+                                'height': '32px',
+                                'padding': '0',
+                                'border': '1px solid #ced4da',
+                                'cursor': 'pointer',
+                                'borderRadius': '3px'
+                            }
+                        )
+                    ], style={
+                        'height': '40px',
+                        'display': 'flex',
+                        'alignItems': 'center',
+                        'justifyContent': 'center',
+                        'borderBottom': '1px solid #dee2e6'
+                    })
+                )
+            
+            # Create integrated table layout
+            integrated_table = html.Div([
+                html.Div(
+                    color_picker_column,
+                    style={
+                        'width': '80px',
+                        'flexShrink': 0,
+                        'borderRight': '1px solid #dee2e6',
+                        'backgroundColor': 'white'
+                    }
+                ),
+                html.Div(
+                    table,
+                    style={'flex': 1, 'overflow': 'hidden'}
+                )
+            ], style={
+                'display': 'flex',
+                'border': '1px solid #dee2e6',
+                'borderRadius': '4px',
+                'overflow': 'hidden',
+                'height': '350px'
+            })
+            
+            return html.Div([
+                integrated_table,
+                colorscale_dropdown
+            ])
+            
         except Exception as e:
             logging.error(f"Error in update_aesthetics_table: {e}", exc_info=True)
             return html.Div(
@@ -507,28 +608,180 @@ def create_app(args):
     @app.callback(
         Output('marker-aesthetics-store', 'data'),
         [Input('save-aesthetics', 'n_clicks')],
-        [State('aesthetics-edit-table', 'rowData'), State('marker-aesthetics-store', 'data'), State('dropdown-group', 'value')],
+        [
+            State('marker-aesthetics-store', 'data'),
+            State('dropdown-group', 'value'),
+            State({'type': 'color-input-modal', 'index': ALL}, 'value'),
+            State({'type': 'color-input-modal', 'index': ALL}, 'id'),
+            State('aesthetics-edit-table', 'rowData'),
+            State('colorscale-dropdown-modal', 'value')
+        ],
         prevent_initial_call=True
     )
-    def save_aesthetics_edits(n_clicks, rows, aesthetics_store, group):
-        """Save aesthetics table edits to store when Save button is clicked"""
-        if not n_clicks or not rows or not aesthetics_store or not group:
+    def save_aesthetics_edits(n_clicks, aesthetics_store, group, color_values, color_ids, row_data, colorscale):
+        """Save aesthetics edits to store when Save button is clicked"""
+        if not n_clicks or not aesthetics_store or not group:
             raise dash.exceptions.PreventUpdate
         
-        # Extract the aesthetics for the current group
+        # Get current group aesthetics
         if group not in aesthetics_store:
-            logging.warning(f"Group '{group}' not found in aesthetics store, using get_init_aesthetics")
             group_aesthetics = get_init_aesthetics(args, group, df)
         else:
             group_aesthetics = aesthetics_store[group]
         
-        # Apply the edited rows to the group's aesthetics
-        updated_group_aesthetics = apply_aesthetics_table_rows(rows, group_aesthetics)
+        # Check if continuous (colorscale only)
+        is_continuous = group != 'none' and group in df.columns and df[group].dtype.kind in 'fi'
         
-        # Update the store with the modified group aesthetics
-        aesthetics_store[group] = updated_group_aesthetics
-        logging.info(f"Aesthetics saved for group '{group}': {updated_group_aesthetics}")
+        if is_continuous:
+            # For continuous, just update colorscale
+            if colorscale:
+                group_aesthetics['color']['colorscale'] = colorscale
+        else:
+            # For categorical, update colors from color pickers and size/opacity/symbol from AG Grid
+            default_size = group_aesthetics['size']['default']
+            default_opacity = group_aesthetics['opacity']['default']
+            default_symbol = group_aesthetics['symbol']['default']
+            
+            # Update colors from pattern-matched color pickers
+            if color_values and color_ids:
+                for val, id_dict in zip(color_values, color_ids):
+                    key = id_dict['index']
+                    # Handle type conversion
+                    if key not in group_aesthetics['color']:
+                        for existing_key in group_aesthetics['color'].keys():
+                            if str(existing_key) == str(key):
+                                key = existing_key
+                                break
+                    group_aesthetics['color'][key] = val
+            
+            # Update size/opacity/symbol from AG Grid rowData
+            if row_data:
+                for row in row_data:
+                    key = row['Group']
+                    
+                    # Handle type conversion - AG Grid may serialize numeric keys as strings
+                    if key not in group_aesthetics['size']:
+                        for existing_key in group_aesthetics['size'].keys():
+                            if str(existing_key) == str(key):
+                                key = existing_key
+                                break
+                    
+                    # Size
+                    size_val = row.get('Size')
+                    if size_val == '-' or size_val == '' or size_val is None:
+                        group_aesthetics['size'][key] = default_size
+                    else:
+                        try:
+                            group_aesthetics['size'][key] = int(size_val)
+                        except (ValueError, TypeError):
+                            group_aesthetics['size'][key] = default_size
+                    
+                    # Opacity
+                    opacity_val = row.get('Opacity')
+                    if opacity_val == '-' or opacity_val == '' or opacity_val is None:
+                        group_aesthetics['opacity'][key] = default_opacity
+                    else:
+                        try:
+                            group_aesthetics['opacity'][key] = float(opacity_val)
+                        except (ValueError, TypeError):
+                            group_aesthetics['opacity'][key] = default_opacity
+                    
+                    # Symbol
+                    symbol_val = row.get('Symbol')
+                    if symbol_val == '-' or symbol_val == '' or symbol_val is None:
+                        group_aesthetics['symbol'][key] = default_symbol
+                    else:
+                        group_aesthetics['symbol'][key] = symbol_val
+        
+        # Update store
+        aesthetics_store[group] = group_aesthetics
+        logging.info(f"Aesthetics saved for group '{group}'")
         return aesthetics_store
+    
+    # Callback to export aesthetics to JSON file
+    @app.callback(
+        Output('download-aesthetics', 'data'),
+        [Input('export-aesthetics-btn', 'n_clicks')],
+        [State('marker-aesthetics-store', 'data')],
+        prevent_initial_call=True
+    )
+    def export_aesthetics(n_clicks, aesthetics_store):
+        """Export aesthetics store to JSON file for --aesthetics_file"""
+        if not n_clicks or not aesthetics_store:
+            raise dash.exceptions.PreventUpdate
+        
+        import json
+        
+        # Filter aesthetics to only include non-default values
+        filtered_aesthetics = {}
+        
+        for group, group_data in aesthetics_store.items():
+            filtered_group = {
+                'color': {},
+                'size': {},
+                'opacity': {},
+                'symbol': {},
+                'symbol_map': {}
+            }
+            
+            # Always include defaults and unselected
+            for key in ['default', 'unselected']:
+                if key in group_data['color']:
+                    filtered_group['color'][key] = group_data['color'][key]
+                if key in group_data['size']:
+                    filtered_group['size'][key] = group_data['size'][key]
+                if key in group_data['opacity']:
+                    filtered_group['opacity'][key] = group_data['opacity'][key]
+                if key in group_data['symbol']:
+                    filtered_group['symbol'][key] = group_data['symbol'][key]
+                if key in group_data['symbol_map']:
+                    filtered_group['symbol_map'][key] = group_data['symbol_map'][key]
+            
+            # Include colorscale for continuous variables
+            if 'colorscale' in group_data['color']:
+                filtered_group['color']['colorscale'] = group_data['color']['colorscale']
+            
+            # Get defaults for comparison
+            default_size = group_data['size'].get('default', args.point_size)
+            default_opacity = group_data['opacity'].get('default', args.point_opacity)
+            default_symbol = group_data['symbol'].get('default', args.point_symbol)
+            
+            # Include only non-default category values
+            for key in group_data['color'].keys():
+                if key not in ['default', 'unselected', 'colorscale']:
+                    # Check if any aesthetic differs from default
+                    has_non_default = False
+                    
+                    if key in group_data['size'] and group_data['size'][key] != default_size:
+                        filtered_group['size'][key] = group_data['size'][key]
+                        has_non_default = True
+                    
+                    if key in group_data['opacity'] and group_data['opacity'][key] != default_opacity:
+                        filtered_group['opacity'][key] = group_data['opacity'][key]
+                        has_non_default = True
+                    
+                    if key in group_data['symbol'] and group_data['symbol'][key] != default_symbol:
+                        filtered_group['symbol'][key] = group_data['symbol'][key]
+                        has_non_default = True
+                    
+                    # Always include color for categories (it's always defined)
+                    if key in group_data['color']:
+                        filtered_group['color'][key] = group_data['color'][key]
+                        has_non_default = True
+                    
+                    # Include symbol_map if present
+                    if key in group_data.get('symbol_map', {}):
+                        filtered_group['symbol_map'][key] = group_data['symbol_map'][key]
+            
+            filtered_aesthetics[group] = filtered_group
+        
+        # Create JSON string
+        json_str = json.dumps(filtered_aesthetics, indent=2)
+        
+        # Return download data
+        return dict(content=json_str, filename='aesthetics.json')
+    
+    # Removed: color-hex-display callback (no longer needed)
     
     logging.info("Dash application created successfully")
     return app
@@ -584,130 +837,6 @@ def get_init_aesthetics(args, group, df):
     return aesthetics
 
 
-def _safe_float(val, fallback):
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return fallback
-
-
-def build_aesthetics_table_rows(group, df, aesthetics):
-    """Build row data for aesthetics editor table."""
-    default_size = aesthetics['size']['default']
-    default_opacity = aesthetics['opacity']['default']
-    default_symbol = aesthetics['symbol']['default']
-    default_color = aesthetics['color'].get('default')
-    default_colorscale = aesthetics['color'].get('colorscale')
-
-    def val_or_dash(value, default):
-        return '-' if value == default else value
-
-    rows = [
-        {
-            'Group': 'default',
-            'Size': default_size,
-            'Symbol': default_symbol,
-            'Opacity': default_opacity,
-            'Color': default_color,
-            'Colorscale': default_colorscale
-        },
-        {
-            'Group': 'unselected',
-            'Size': val_or_dash(aesthetics['size'].get('unselected', default_size), default_size),
-            'Symbol': val_or_dash(aesthetics['symbol'].get('unselected', default_symbol), default_symbol),
-            'Opacity': val_or_dash(aesthetics['opacity'].get('unselected', default_opacity), default_opacity),
-            'Color': val_or_dash(aesthetics['color'].get('unselected', default_color), default_color),
-            'Colorscale': '-'
-        }
-    ]
-
-    if group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi':
-        for g in df[group].dropna().unique():
-            rows.append({
-                'Group': str(g),
-                'Size': val_or_dash(aesthetics['size'].get(g, default_size), default_size),
-                'Symbol': val_or_dash(aesthetics['symbol'].get(g, default_symbol), default_symbol),
-                'Opacity': val_or_dash(aesthetics['opacity'].get(g, default_opacity), default_opacity),
-                'Color': val_or_dash(aesthetics['color'].get(g, default_color), default_color),
-                'Colorscale': '-'
-            })
-
-    return rows
-
-
-def apply_aesthetics_table_rows(rows, base_aesthetics):
-    """Apply table rows to aesthetics dict."""
-    try:
-        if not rows or not base_aesthetics:
-            logging.warning("apply_aesthetics_table_rows: missing rows or base_aesthetics")
-            return base_aesthetics
-
-        # Verify base_aesthetics has required keys
-        required_keys = ['size', 'opacity', 'symbol', 'symbol_map', 'color']
-        missing_keys = [k for k in required_keys if k not in base_aesthetics]
-        if missing_keys:
-            logging.error(f"apply_aesthetics_table_rows: base_aesthetics missing keys: {missing_keys}")
-            logging.error(f"base_aesthetics keys: {list(base_aesthetics.keys())}")
-            return base_aesthetics
-
-        default_row = next((r for r in rows if str(r.get('Group')) == 'default'), {})
-        unselected_row = next((r for r in rows if str(r.get('Group')) == 'unselected'), {})
-
-        default_size = _safe_float(default_row.get('Size'), base_aesthetics['size'].get('default', 8))
-        default_opacity = _safe_float(default_row.get('Opacity'), base_aesthetics['opacity'].get('default', 0.8))
-        default_symbol = default_row.get('Symbol') or base_aesthetics['symbol'].get('default', 'circle')
-        default_color = default_row.get('Color') or base_aesthetics['color'].get('default', '#1f77b4')
-        default_colorscale = default_row.get('Colorscale') or base_aesthetics['color'].get('colorscale')
-
-        updated = {
-            'size': dict(base_aesthetics['size']),
-            'opacity': dict(base_aesthetics['opacity']),
-            'symbol': dict(base_aesthetics['symbol']),
-            'symbol_map': dict(base_aesthetics['symbol_map']),
-            'color': dict(base_aesthetics['color'])
-        }
-
-        updated['size']['default'] = default_size
-        updated['opacity']['default'] = default_opacity
-        updated['symbol']['default'] = default_symbol
-        updated['color']['default'] = default_color
-        if default_colorscale:
-            updated['color']['colorscale'] = default_colorscale
-
-        # Unselected row
-        if unselected_row:
-            updated['size']['unselected'] = _safe_float(unselected_row.get('Size'), default_size) if unselected_row.get('Size') != '-' else default_size
-            updated['opacity']['unselected'] = _safe_float(unselected_row.get('Opacity'), default_opacity) if unselected_row.get('Opacity') != '-' else default_opacity
-            updated['symbol']['unselected'] = unselected_row.get('Symbol') if unselected_row.get('Symbol') not in (None, '-', '') else default_symbol
-            updated['color']['unselected'] = unselected_row.get('Color') if unselected_row.get('Color') not in (None, '-', '') else default_color
-
-        # Group rows
-        for r in rows:
-            group_key = r.get('Group')
-            if group_key in (None, 'default', 'unselected'):
-                continue
-            if r.get('Size') not in (None, '-', ''):
-                updated['size'][group_key] = _safe_float(r.get('Size'), default_size)
-            if r.get('Opacity') not in (None, '-', ''):
-                updated['opacity'][group_key] = _safe_float(r.get('Opacity'), default_opacity)
-            if r.get('Symbol') not in (None, '-', ''):
-                updated['symbol'][group_key] = r.get('Symbol')
-            if r.get('Color') not in (None, '-', ''):
-                updated['color'][group_key] = r.get('Color')
-
-        logging.debug(f"apply_aesthetics_table_rows succeeded, returning updated aesthetics")
-        return updated
-        
-    except Exception as e:
-        logging.error(f"Error in apply_aesthetics_table_rows: {e}", exc_info=True)
-        logging.error(f"Returning base_aesthetics unchanged due to error")
-        return base_aesthetics
-        if r.get('Symbol') not in (None, '-', ''):
-            updated['symbol'][group_key] = r.get('Symbol')
-        if r.get('Color') not in (None, '-', ''):
-            updated['color'][group_key] = r.get('Color')
-
-    return updated
 
 
 def get_aesthetics_for_group(args, group, df, store_data):
@@ -1000,11 +1129,11 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     dcc.RadioItems(
                         id='time-viz-mode',
                         options=[
-                            {'label': 'Distribution', 'value': 'distribution'},
                             {'label': 'Scatter (jittered)', 'value': 'scatter'},
-                            {'label': 'Selected vs All', 'value': 'overlay'}
+                            {'label': 'Distribution', 'value': 'distribution'},
+                            {'label': 'Distribution with selection', 'value': 'overlay'}
                         ],
-                        value='distribution',
+                        value='scatter',
                         inline=True,
                         inputStyle={'marginRight': '5px'},
                         labelStyle={'marginRight': '15px'}
@@ -1223,21 +1352,32 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 dbc.ModalHeader(dbc.ModalTitle("Aesthetics Editor")),
                 dbc.ModalBody([
                     html.P(
-                        "Edit values per group. Use '-' to keep default.",
+                        "Edit values per group. Use '-' to keep default value.",
                         style={'color': '#666', 'marginBottom': '12px'}
                     ),
                     html.Div(
                         id='aesthetics-table-container',
                         style={
-                            'height': '300px',
-                            'maxHeight': '300px',
+                            'overflowX': 'auto',
                             'overflowY': 'auto',
-                            'border': '1px solid #ddd',
-                            'borderRadius': '4px'
+                            'maxHeight': '60vh'
                         }
                     )
                 ], style={'maxHeight': '70vh', 'overflowY': 'auto'}),
                 dbc.ModalFooter([
+                    html.Button(
+                        'Export to File',
+                        id='export-aesthetics-btn',
+                        style={
+                            'padding': '8px 16px',
+                            'border': '1px solid #28a745',
+                            'borderRadius': '4px',
+                            'backgroundColor': '#28a745',
+                            'color': '#ffffff',
+                            'cursor': 'pointer',
+                            'marginRight': 'auto'
+                        }
+                    ),
                     html.Button(
                         'Cancel',
                         id='cancel-aesthetics',
@@ -1268,6 +1408,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             is_open=False,
             size='lg'
         ),
+        dcc.Download(id='download-aesthetics'),
         html.Div(
             id='pca-plots-container',
             children=[

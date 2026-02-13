@@ -580,6 +580,7 @@ def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=Non
             color = aesthetics_group['color'].get(str(group_val), 'steelblue')
             size = aesthetics_group['size'].get(str(group_val), 8)
             opacity = aesthetics_group['opacity'].get(str(group_val), 0.7)
+            symbol = aesthetics_group['symbol'].get(str(group_val), aesthetics_group['symbol'].get('default', 'circle'))
             
             trace = go.Scattergeo(
                 lat=df_group[lat_col],
@@ -588,7 +589,8 @@ def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=Non
                 marker=dict(
                     size=size,
                     color=color,
-                    opacity=opacity
+                    opacity=opacity,
+                    symbol=symbol
                 ),
                 text=[str(group_val)] * len(df_group),
                 customdata=df_group['id'],
