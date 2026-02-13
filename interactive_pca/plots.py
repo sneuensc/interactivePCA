@@ -560,6 +560,7 @@ def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=Non
                 color=df_map[group],
                 colorscale=aesthetics_group['color'].get('colorscale', 'Viridis'),
                 opacity=aesthetics_group['opacity'].get('default', 0.7),
+                symbol=aesthetics_group.get('symbol_map', {}).get('default', 'circle'),
                 colorbar=dict(title=group),
                 showscale=True
             ),

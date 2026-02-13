@@ -91,6 +91,11 @@ def create_app(args):
             'Abbreviation'
         ].tolist()
         dropdown_group_list.extend(grouping_cols)
+
+    # Include PCs as grouping options
+    for pc in pcs:
+        if pc not in dropdown_group_list:
+            dropdown_group_list.append(pc)
     
     init_group = args.group if args.group and args.group in dropdown_group_list else dropdown_group_list[0]
     
@@ -116,13 +121,9 @@ def create_app(args):
             init_aesthetics = merge_aesthetics(init_aesthetics, file_aesthetics[init_group])
     
     # Create Dash app
-    assets_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), '..', '..', 'interactivePCA', 'assets')
-    )
     app = dash.Dash(
         __name__,
         external_stylesheets=[dbc.themes.BOOTSTRAP],
-        assets_folder=assets_path,
         suppress_callback_exceptions=True
     )
     
@@ -209,10 +210,20 @@ def create_app(args):
             group=group,
             aesthetics_group=aesthetics
         )
+        is_categorical = (
+            group != 'none'
+            and group in df.columns
+            and df[group].dtype.kind not in 'fi'
+        )
         fig.update_layout(
             autosize=True,
-            margin=dict(l=50, r=20, t=40, b=40),
-            legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top')
+            margin=dict(l=50, r=140 if is_categorical else 20, t=40, b=40),
+            legend=dict(
+                x=1.02 if is_categorical else 0.02,
+                y=1 if is_categorical else 0.98,
+                xanchor='left',
+                yanchor='top'
+            )
         )
         return fig
     
@@ -233,10 +244,20 @@ def create_app(args):
             lat_col=ANNOTATION_LAT,
             lon_col=ANNOTATION_LONG
         )
+        is_categorical = (
+            group != 'none'
+            and group in df.columns
+            and df[group].dtype.kind not in 'fi'
+        )
         fig.update_layout(
             autosize=True,
-            margin=dict(l=50, r=20, t=40, b=40),
-            legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top')
+            margin=dict(l=50, r=140 if is_categorical else 20, t=40, b=40),
+            legend=dict(
+                x=1.02 if is_categorical else 0.02,
+                y=1 if is_categorical else 0.98,
+                xanchor='left',
+                yanchor='top'
+            )
         )
         return fig
     
@@ -252,6 +273,7 @@ def create_app(args):
     def update_time_histogram(group, viz_mode, time_variable, selected_data, aesthetics_store):
         import plotly.graph_objects as go
         import numpy as np
+        import pandas as pd
         
         if time_variable is None or time_variable not in df.columns:
             return {}
@@ -281,7 +303,6 @@ def create_app(args):
                 name='All samples'
             ))
             fig.update_layout(
-                title=f"Distribution ({time_variable})",
                 xaxis_title=time_variable,
                 yaxis_title="Count",
                 showlegend=False,
@@ -309,6 +330,7 @@ def create_app(args):
                             colorscale=colorscale,
                             size=default_size,
                             opacity=default_opacity,
+                            symbol=aesthetics['symbol'].get('default', 'circle'),
                             showscale=True,
                             colorbar=dict(title=group)
                         ),
@@ -320,19 +342,22 @@ def create_app(args):
                     size_map = aesthetics.get('size', {})
                     opacity_map = aesthetics.get('opacity', {})
                     symbol_map = aesthetics.get('symbol', {})
-                    
-                    colors = [color_map.get(str(val), default_color) for val in group_vals]
-                    sizes = [size_map.get(str(val), default_size) for val in group_vals]
-                    opacities = [opacity_map.get(str(val), default_opacity) for val in group_vals]
-                    symbols = [symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle')) for val in group_vals]
-                    
-                    fig.add_trace(go.Scatter(
-                        x=time_vals,
-                        y=jitter,
-                        mode='markers',
-                        marker=dict(color=colors, size=sizes, opacity=opacities, symbol=symbols),
-                        name='All samples'
-                    ))
+                    unique_vals = [val for val in group_vals.unique() if not pd.isna(val)]
+                    for val in unique_vals:
+                        mask = group_vals == val
+                        fig.add_trace(go.Scatter(
+                            x=time_vals[mask],
+                            y=jitter[mask.to_numpy()],
+                            mode='markers',
+                            marker=dict(
+                                color=color_map.get(str(val), default_color),
+                                size=size_map.get(str(val), default_size),
+                                opacity=opacity_map.get(str(val), default_opacity),
+                                symbol=symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle'))
+                            ),
+                            name=str(val),
+                            showlegend=True
+                        ))
             else:
                 fig.add_trace(go.Scatter(
                     x=time_vals,
@@ -342,12 +367,35 @@ def create_app(args):
                     name='All samples'
                 ))
             fig.update_layout(
-                title=f"Scatter ({time_variable})",
                 xaxis_title=time_variable,
                 yaxis_title="",
                 yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-                showlegend=False,
-                autosize=True
+                showlegend=(
+                    group != 'none'
+                    and group in df.columns
+                    and df[group].dtype.kind not in 'fi'
+                ),
+                autosize=True,
+                legend=dict(
+                    x=1.02,
+                    y=1,
+                    xanchor='left',
+                    yanchor='top'
+                ) if (
+                    group != 'none'
+                    and group in df.columns
+                    and df[group].dtype.kind not in 'fi'
+                ) else dict(x=0.02, y=0.98, xanchor='left', yanchor='top'),
+                margin=dict(
+                    l=50,
+                    r=140 if (
+                        group != 'none'
+                        and group in df.columns
+                        and df[group].dtype.kind not in 'fi'
+                    ) else 20,
+                    t=40,
+                    b=40
+                )
             )
             
         elif viz_mode == 'overlay':
@@ -382,7 +430,6 @@ def create_app(args):
                     ))
                 
                 fig.update_layout(
-                    title=f"Distribution: Selected vs All ({time_variable})",
                     xaxis_title=time_variable,
                     yaxis_title="Count",
                     barmode='overlay',
@@ -399,7 +446,6 @@ def create_app(args):
                     name='All samples'
                 ))
                 fig.update_layout(
-                    title=f"Distribution ({time_variable}) - Select points on PCA plot",
                     xaxis_title=time_variable,
                     yaxis_title="Count",
                     showlegend=False,
@@ -872,6 +918,9 @@ def create_app(args):
                     symbol_val = row.get('Symbol')
                     if symbol_val and symbol_val != '' and symbol_val != '-':
                         group_aesthetics['symbol'][key] = symbol_val
+                        # Keep map symbols in sync for continuous groups
+                        if 'symbol_map' in group_aesthetics:
+                            group_aesthetics['symbol_map'][key] = symbol_val
         else:
             # For categorical, update colors from color pickers and size/opacity/symbol from AG Grid
             default_size = group_aesthetics['size']['default']
@@ -1385,7 +1434,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # Control dropdowns
     control_section = html.Div([
         html.Div([
-            html.Label('PC X:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+            html.Label('X:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
             dcc.Dropdown(
                 id='dropdown-pc-x',
                 options=[{'label': pc, 'value': pc} for pc in pcs],
@@ -1395,7 +1444,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             ),
         ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
         html.Div([
-            html.Label('PC Y:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+            html.Label('Y:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
             dcc.Dropdown(
                 id='dropdown-pc-y',
                 options=[{'label': pc, 'value': pc} for pc in pcs],
@@ -1459,7 +1508,6 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             fig_time = go.Figure()
             fig_time.add_trace(go.Histogram(x=time_vals, nbinsx=50, marker=dict(color='steelblue')))
             fig_time.update_layout(
-                title=f"Distribution ({default_continuous})",
                 xaxis_title=default_continuous,
                 yaxis_title="Count",
                 height=250,
@@ -1476,7 +1524,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         options=[{'label': c, 'value': c} for c in continuous_columns],
                         value=default_continuous,
                         clearable=False,
-                        style={'width': '200px', 'display': 'inline-block', 'marginRight': '15px'}
+                        style={'width': '200px'}
                     ),
                     html.Label('Visualization mode:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
                     dcc.RadioItems(
@@ -1492,6 +1540,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         labelStyle={'marginRight': '15px'}
                     )
                 ], style={
+                    'display': 'flex',
+                    'alignItems': 'center',
+                    'gap': '10px',
+                    'flexWrap': 'wrap',
                     'marginBottom': '10px',
                     'padding': '8px',
                     'backgroundColor': '#f8f9fa',
@@ -1541,7 +1593,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     'cursor': 'row-resize',
                     'userSelect': 'none',
                     'flex': '0 0 8px',
-                    'transition': 'background-color 0.2s'
+                        'transition': 'background-color 0.2s',
+                        'position': 'relative',
+                        'zIndex': 5,
+                        'pointerEvents': 'auto'
                 },
                 title='Drag to resize'
             ),
@@ -1646,7 +1701,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         'cursor': 'row-resize',
                         'userSelect': 'none',
                         'flex': '0 0 8px',
-                        'transition': 'background-color 0.2s'
+                        'transition': 'background-color 0.2s',
+                        'position': 'relative',
+                        'zIndex': 5,
+                        'pointerEvents': 'auto'
                     },
                     title='Drag to resize'
                 ),
@@ -1784,7 +1842,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         'cursor': 'col-resize',
                         'userSelect': 'none',
                         'flex': '0 0 8px',
-                        'transition': 'background-color 0.2s'
+                        'transition': 'background-color 0.2s',
+                        'position': 'relative',
+                        'zIndex': 5,
+                        'pointerEvents': 'auto'
                     },
                     title='Drag to resize panes'
                 ),
