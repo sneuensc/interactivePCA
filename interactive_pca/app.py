@@ -4,6 +4,8 @@ Main Dash application factory for interactivePCA.
 
 import logging
 import os
+import json
+import copy
 import dash
 import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, State, ALL
@@ -103,13 +105,24 @@ def create_app(args):
         if dropdown_list_continuous and ANNOTATION_TIME not in dropdown_list_continuous:
             init_continuous = dropdown_list_continuous[0] if dropdown_list_continuous else None
     
-    # Initialize aesthetics
+    # Initialize aesthetics from parameters
     init_aesthetics = get_init_aesthetics(args, init_group, df)
     
+    # Load aesthetics from file if provided (overrides parameter defaults)
+    if args.aesthetics_file:
+        file_aesthetics = load_aesthetics_file(args.aesthetics_file)
+        if file_aesthetics and init_group in file_aesthetics:
+            # Merge file aesthetics with parameter-based defaults
+            init_aesthetics = merge_aesthetics(init_aesthetics, file_aesthetics[init_group])
+    
     # Create Dash app
+    assets_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', '..', 'interactivePCA', 'assets')
+    )
     app = dash.Dash(
         __name__,
         external_stylesheets=[dbc.themes.BOOTSTRAP],
+        assets_folder=assets_path,
         suppress_callback_exceptions=True
     )
     
@@ -449,11 +462,200 @@ def create_app(args):
             )
             
             if is_continuous:
-                # Continuous: just show colorscale selector
-                return html.Div([
-                    html.Div("Select colorscale for continuous variable:", style={'marginBottom': '8px'}),
-                    colorscale_dropdown
-                ])
+                # Continuous: show Group and Color in left column, Size/Opacity/Symbol in right grid
+                default_size = aesthetics['size']['default']
+                default_opacity = aesthetics['opacity']['default']
+                default_symbol = aesthetics['symbol']['default']
+                unselected_color = aesthetics['color'].get('unselected', '#cccccc')
+                colorscale = aesthetics['color'].get('colorscale', 'Viridis')
+                
+                # Build table rows for default and unselected (only Size, Opacity, Symbol in AG Grid)
+                rows = []
+                rows.append({
+                    'Size': default_size,
+                    'Opacity': default_opacity,
+                    'Symbol': default_symbol
+                })
+                rows.append({
+                    'Size': aesthetics['size'].get('unselected', default_size),
+                    'Opacity': aesthetics['opacity'].get('unselected', default_opacity),
+                    'Symbol': aesthetics['symbol'].get('unselected', default_symbol)
+                })
+                
+                # Column definitions (no Group, no Color)
+                columnDefs = [
+                    {
+                        'field': 'Size',
+                        'headerName': 'Size',
+                        'editable': True,
+                        'width': 90,
+                        'singleClickEdit': True,
+                        'cellEditor': 'agSelectCellEditor',
+                        'cellEditorParams': {'values': [4, 6, 8, 10, 12, 14, 16, 18, 20]}
+                    },
+                    {
+                        'field': 'Opacity',
+                        'headerName': 'Opacity',
+                        'editable': True,
+                        'width': 100,
+                        'singleClickEdit': True,
+                        'cellEditor': 'agSelectCellEditor',
+                        'cellEditorParams': {'values': [0.2, 0.4, 0.6, 0.8, 1.0]}
+                    },
+                    {
+                        'field': 'Symbol',
+                        'headerName': 'Symbol',
+                        'editable': True,
+                        'width': 150,
+                        'singleClickEdit': True,
+                        'cellEditor': 'agSelectCellEditor',
+                        'cellEditorParams': {'values': ['circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star']}
+                    }
+                ]
+                
+                table = dag.AgGrid(
+                    id='aesthetics-edit-table',
+                    rowData=rows,
+                    columnDefs=columnDefs,
+                    defaultColDef={'flex': 1, 'minWidth': 80, 'resizable': True},
+                    dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40},
+                    style={'height': '120px', 'width': '100%'}
+                )
+                
+                # Create left column with Group and Color (in proper order)
+                left_column_groups_colors = []
+                
+                # Header row with "Group" and "Color" labels
+                left_column_groups_colors.append(
+                    html.Div([
+                        html.Div('Group', style={
+                            'flex': 1,
+                            'height': '40px',
+                            'display': 'flex',
+                            'alignItems': 'center',
+                            'justifyContent': 'center',
+                            'fontWeight': 'bold',
+                            'fontSize': '14px',
+                            'borderRight': '1px solid #dee2e6',
+                            'backgroundColor': '#f8f9fa'
+                        }),
+                        html.Div('Color', style={
+                            'flex': 1,
+                            'height': '40px',
+                            'display': 'flex',
+                            'alignItems': 'center',
+                            'justifyContent': 'center',
+                            'fontWeight': 'bold',
+                            'fontSize': '14px',
+                            'backgroundColor': '#f8f9fa'
+                        })
+                    ], style={'display': 'flex', 'borderBottom': '2px solid #dee2e6'})
+                )
+                
+                # Default row: "default" | colorscale dropdown
+                left_column_groups_colors.append(
+                    html.Div([
+                        html.Div('default', style={
+                            'flex': 1,
+                            'height': '40px',
+                            'display': 'flex',
+                            'alignItems': 'center',
+                            'justifyContent': 'center',
+                            'borderRight': '1px solid #dee2e6',
+                            'fontSize': '12px',
+                            'backgroundColor': 'white'
+                        }),
+                        html.Div([
+                            dcc.Dropdown(
+                                id={'type': 'colorscale-dropdown-modal', 'index': 'default'},
+                                options=[
+                                    {'label': 'Viridis', 'value': 'Viridis'},
+                                    {'label': 'Plasma', 'value': 'Plasma'},
+                                    {'label': 'Blues', 'value': 'Blues'},
+                                    {'label': 'Reds', 'value': 'Reds'},
+                                    {'label': 'Greens', 'value': 'Greens'},
+                                    {'label': 'Purples', 'value': 'Purples'},
+                                    {'label': 'RdYlBu', 'value': 'RdYlBu'},
+                                    {'label': 'RdYlGn', 'value': 'RdYlGn'},
+                                ],
+                                value=colorscale,
+                                clearable=False,
+                                style={'width': '100%', 'fontSize': '12px'}
+                            )
+                        ], style={
+                            'flex': 1,
+                            'height': '40px',
+                            'display': 'flex',
+                            'alignItems': 'center',
+                            'padding': '0 8px',
+                            'backgroundColor': 'white'
+                        })
+                    ], style={'display': 'flex', 'borderBottom': '1px solid #dee2e6'})
+                )
+                
+                # Unselected row: "unselected" | color picker
+                left_column_groups_colors.append(
+                    html.Div([
+                        html.Div('unselected', style={
+                            'flex': 1,
+                            'height': '40px',
+                            'display': 'flex',
+                            'alignItems': 'center',
+                            'justifyContent': 'center',
+                            'borderRight': '1px solid #dee2e6',
+                            'fontSize': '12px',
+                            'backgroundColor': 'white'
+                        }),
+                        html.Div([
+                            dbc.Input(
+                                type="color",
+                                id={'type': 'color-input-modal', 'index': 'unselected'},
+                                value=unselected_color,
+                                style={
+                                    'width': '40px',
+                                    'height': '32px',
+                                    'padding': '0',
+                                    'border': '1px solid #ced4da',
+                                    'cursor': 'pointer',
+                                    'borderRadius': '3px'
+                                }
+                            )
+                        ], style={
+                            'flex': 1,
+                            'height': '40px',
+                            'display': 'flex',
+                            'alignItems': 'center',
+                            'justifyContent': 'center',
+                            'backgroundColor': 'white'
+                        })
+                    ], style={'display': 'flex'})
+                )
+                
+                # Create integrated table layout: Group+Color | Size, Opacity, Symbol
+                integrated_table = html.Div([
+                    html.Div(
+                        left_column_groups_colors,
+                        style={
+                            'width': '220px',
+                            'flexShrink': 0,
+                            'borderRight': '1px solid #dee2e6',
+                            'backgroundColor': 'white'
+                        }
+                    ),
+                    html.Div(
+                        table,
+                        style={'flex': 1, 'overflow': 'hidden'}
+                    )
+                ], style={
+                    'display': 'flex',
+                    'border': '1px solid #dee2e6',
+                    'borderRadius': '4px',
+                    'overflow': 'hidden',
+                    'height': '120px'
+                })
+                
+                return integrated_table
+
             
             # Categorical: build AG Grid table with editable colors
             default_size = aesthetics['size']['default']
@@ -469,8 +671,8 @@ def create_app(args):
                 symbol_val = aesthetics['symbol'].get(key, default_symbol)
                 
                 # Show "-" if equals default (except for "default" row itself)
-                size_display = "-" if (size_val == default_size and key != 'default') else size_val
-                opacity_display = "-" if (opacity_val == default_opacity and key != 'default') else opacity_val
+                size_display = "-" if (size_val == default_size and key != 'default') else str(size_val)
+                opacity_display = "-" if (opacity_val == default_opacity and key != 'default') else str(opacity_val)
                 symbol_display = "-" if (symbol_val == default_symbol and key != 'default') else symbol_val
                 
                 rows.append({
@@ -496,7 +698,7 @@ def create_app(args):
                     'width': 90,
                     'singleClickEdit': True,
                     'cellEditor': 'agSelectCellEditor',
-                    'cellEditorParams': {'values': ['-', 4, 6, 8, 10, 12, 14, 16, 18, 20]}
+                    'cellEditorParams': {'values': ['-', '4', '6', '8', '10', '12', '14', '16', '18', '20']}
                 },
                 {
                     'field': 'Opacity',
@@ -505,12 +707,13 @@ def create_app(args):
                     'width': 100,
                     'singleClickEdit': True,
                     'cellEditor': 'agSelectCellEditor',
-                    'cellEditorParams': {'values': ['-', 0.2, 0.4, 0.6, 0.8, 1.0]}
+                    'cellEditorParams': {'values': ['-', '0.0', '0.2', '0.4', '0.6', '0.8', '1.0']}
                 },
                 {
                     'field': 'Symbol',
                     'headerName': 'Symbol',
                     'editable': True,
+                    'type': 'text',
                     'width': 150,
                     'singleClickEdit': True,
                     'cellEditor': 'agSelectCellEditor',
@@ -591,10 +794,7 @@ def create_app(args):
                 'height': '350px'
             })
             
-            return html.Div([
-                integrated_table,
-                colorscale_dropdown
-            ])
+            return integrated_table
             
         except Exception as e:
             logging.error(f"Error in update_aesthetics_table: {e}", exc_info=True)
@@ -614,11 +814,11 @@ def create_app(args):
             State({'type': 'color-input-modal', 'index': ALL}, 'value'),
             State({'type': 'color-input-modal', 'index': ALL}, 'id'),
             State('aesthetics-edit-table', 'rowData'),
-            State('colorscale-dropdown-modal', 'value')
+            State({'type': 'colorscale-dropdown-modal', 'index': ALL}, 'value')
         ],
         prevent_initial_call=True
     )
-    def save_aesthetics_edits(n_clicks, aesthetics_store, group, color_values, color_ids, row_data, colorscale):
+    def save_aesthetics_edits(n_clicks, aesthetics_store, group, color_values, color_ids, row_data, colorscale_values):
         """Save aesthetics edits to store when Save button is clicked"""
         if not n_clicks or not aesthetics_store or not group:
             raise dash.exceptions.PreventUpdate
@@ -633,9 +833,45 @@ def create_app(args):
         is_continuous = group != 'none' and group in df.columns and df[group].dtype.kind in 'fi'
         
         if is_continuous:
-            # For continuous, just update colorscale
-            if colorscale:
-                group_aesthetics['color']['colorscale'] = colorscale
+            # For continuous, update colorscale from dropdown and unselected color from color picker
+            
+            # Update colorscale from pattern-matched dropdown
+            if colorscale_values and len(colorscale_values) > 0:
+                group_aesthetics['color']['colorscale'] = colorscale_values[0]
+            
+            # Update unselected color from pattern-matched color picker
+            if color_values and color_ids:
+                for val, id_dict in zip(color_values, color_ids):
+                    key = id_dict['index']
+                    if key == 'unselected':
+                        group_aesthetics['color']['unselected'] = val
+            
+            # Update size/opacity/symbol from AG Grid rowData for default and unselected
+            # Row 0 = 'default', Row 1 = 'unselected'
+            if row_data:
+                for idx, row in enumerate(row_data):
+                    key = 'default' if idx == 0 else 'unselected'
+                    
+                    # Size
+                    size_val = row.get('Size')
+                    if size_val and size_val != '':
+                        try:
+                            group_aesthetics['size'][key] = int(size_val)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Opacity
+                    opacity_val = row.get('Opacity')
+                    if opacity_val and opacity_val != '':
+                        try:
+                            group_aesthetics['opacity'][key] = float(opacity_val)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Symbol: skip if "-" (means use default)
+                    symbol_val = row.get('Symbol')
+                    if symbol_val and symbol_val != '' and symbol_val != '-':
+                        group_aesthetics['symbol'][key] = symbol_val
         else:
             # For categorical, update colors from color pickers and size/opacity/symbol from AG Grid
             default_size = group_aesthetics['size']['default']
@@ -785,6 +1021,87 @@ def create_app(args):
     
     logging.info("Dash application created successfully")
     return app
+
+
+def load_aesthetics_file(filepath):
+    """
+    Load aesthetics from a JSON file.
+    
+    Args:
+        filepath: Path to JSON aesthetics file
+    
+    Returns:
+        Dictionary with aesthetics, or empty dict if file not found
+    """
+    try:
+        with open(filepath, 'r') as f:
+            aesthetics = json.load(f)
+        logging.info(f"Loaded aesthetics from {filepath}")
+        return aesthetics
+    except FileNotFoundError:
+        logging.warning(f"Aesthetics file not found: {filepath}")
+        return {}
+    except json.JSONDecodeError as e:
+        logging.error(f"Error parsing aesthetics file {filepath}: {e}")
+        return {}
+    except Exception as e:
+        logging.error(f"Error loading aesthetics file {filepath}: {e}")
+        return {}
+
+
+def merge_aesthetics(defaults, overrides):
+    """
+    Merge override aesthetics into defaults, keeping default structure intact.
+    
+    Args:
+        defaults: Default aesthetics dictionary (from parameters)
+        overrides: Aesthetics overrides from file
+    
+    Returns:
+        Merged aesthetics dictionary
+    """
+    result = copy.deepcopy(defaults)
+    
+    if not overrides:
+        return result
+    
+    # Merge color settings
+    if 'color' in overrides:
+        if isinstance(overrides['color'], dict):
+            for key, val in overrides['color'].items():
+                result['color'][key] = val
+    
+    # Merge size settings
+    if 'size' in overrides:
+        if isinstance(overrides['size'], dict):
+            for key, val in overrides['size'].items():
+                try:
+                    result['size'][key] = int(val)
+                except (ValueError, TypeError):
+                    pass
+    
+    # Merge opacity settings
+    if 'opacity' in overrides:
+        if isinstance(overrides['opacity'], dict):
+            for key, val in overrides['opacity'].items():
+                try:
+                    result['opacity'][key] = float(val)
+                except (ValueError, TypeError):
+                    pass
+    
+    # Merge symbol settings
+    if 'symbol' in overrides:
+        if isinstance(overrides['symbol'], dict):
+            for key, val in overrides['symbol'].items():
+                result['symbol'][key] = val
+    
+    # Merge symbol_map settings
+    if 'symbol_map' in overrides:
+        if isinstance(overrides['symbol_map'], dict):
+            for key, val in overrides['symbol_map'].items():
+                result['symbol_map'][key] = val
+    
+    return result
 
 
 def get_init_aesthetics(args, group, df):
@@ -939,23 +1256,52 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
     # Store tab content map for callback
     tab_content_map = {config['value']: config['content'] for config in tab_configs}
     
+    # Initialize store with all available aesthetics (from file + defaults for init_group)
+    init_store_data = {}
+    
+    # Load all aesthetics from file if provided
+    all_file_aesthetics = {}
+    if args.aesthetics_file:
+        all_file_aesthetics = load_aesthetics_file(args.aesthetics_file)
+    
+    # Add init_group with merged aesthetics
+    init_store_data[init_group] = init_aesthetics
+    
+    # Add all other groups from file (if not already added)
+    for group_name in all_file_aesthetics:
+        if group_name != init_group:
+            # Create base aesthetics for this group and merge with file
+            base_aesthetics = get_init_aesthetics(args, group_name, df)
+            init_store_data[group_name] = merge_aesthetics(base_aesthetics, all_file_aesthetics[group_name])
+    
     # Main layout
     layout = html.Div([
         # Data stores
         dcc.Store(id='selected-ids', data=init_selected_ids),
         dcc.Store(id='selected-source', data='initial'),
-        dcc.Store(id='marker-aesthetics-store', data={init_group: init_aesthetics}),
+        dcc.Store(id='marker-aesthetics-store', data=init_store_data),
         dcc.Store(id='trace-pca', data={}),
         dcc.Store(id='trace-map', data={}),
         dcc.Store(id='trace-time', data={}),
         
         # Header with tabs
         html.Div([
+            html.Img(
+                src='/assets/dbc_logo_400x400.jpg',
+                style={
+                    'height': '40px',
+                    'width': '40px',
+                    'marginLeft': '20px',
+                    'marginRight': '12px',
+                    'marginTop': '5px',
+                    'marginBottom': '5px',
+                    'verticalAlign': 'middle'
+                }
+            ),
             html.H2("interactivePCA", style={
                 'display': 'inline-block',
                 'margin': '0',
                 'marginRight': '30px',
-                'paddingLeft': '20px',
                 'lineHeight': '60px',
                 'fontSize': '24px',
                 'verticalAlign': 'bottom'
@@ -1039,49 +1385,56 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # Control dropdowns
     control_section = html.Div([
         html.Div([
-            html.Button(
-                'Aesthetics',
-                id='open-aesthetics',
-                style={
-                    'marginRight': '10px',
-                    'padding': '6px 12px',
-                    'border': '1px solid #ccc',
-                    'borderRadius': '4px',
-                    'backgroundColor': '#ffffff',
-                    'cursor': 'pointer'
-                }
-            ),
-        ], style={'marginBottom': '10px'}),
-        html.Div([
-            html.Label('Group by:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
-            dcc.Dropdown(
-                id='dropdown-group',
-                options=[{'label': g, 'value': g} for g in dropdown_group_list],
-                value=init_group,
-                clearable=False,
-                style={'width': '250px'}
-            ),
-        ], style={'marginBottom': '15px'}),
-        
-        html.Div([
-            html.Label('PC X:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
+            html.Label('PC X:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
             dcc.Dropdown(
                 id='dropdown-pc-x',
                 options=[{'label': pc, 'value': pc} for pc in pcs],
                 value=pcs[0],
                 clearable=False,
-                style={'width': '120px', 'display': 'inline-block', 'marginRight': '20px'}
+                style={'width': '140px'}
             ),
-            html.Label('PC Y:', style={'marginRight': '10px', 'fontWeight': 'bold', 'display': 'inline-block'}),
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+        html.Div([
+            html.Label('PC Y:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
             dcc.Dropdown(
                 id='dropdown-pc-y',
                 options=[{'label': pc, 'value': pc} for pc in pcs],
                 value=pcs[1],
                 clearable=False,
-                style={'width': '120px', 'display': 'inline-block'}
+                style={'width': '140px'}
             ),
-        ], style={'marginBottom': '15px'}),
-    ], style={'marginBottom': '20px', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'})
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+        html.Div([
+            html.Label('Group by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+            dcc.Dropdown(
+                id='dropdown-group',
+                options=[{'label': g, 'value': g} for g in dropdown_group_list],
+                value=init_group,
+                clearable=False,
+                style={'width': '220px'}
+            ),
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+        html.Button(
+            'Aesthetics',
+            id='open-aesthetics',
+            style={
+                'padding': '6px 12px',
+                'border': '1px solid #ccc',
+                'borderRadius': '4px',
+                'backgroundColor': '#ffffff',
+                'cursor': 'pointer'
+            }
+        ),
+    ], style={
+        'display': 'flex',
+        'alignItems': 'center',
+        'gap': '8px',
+        'marginBottom': '20px',
+        'padding': '12px 15px',
+        'backgroundColor': '#f8f9fa',
+        'borderRadius': '5px',
+        'flexWrap': 'wrap'
+    })
     
     # PCA plot (left side)
     pca_plot = dcc.Graph(
