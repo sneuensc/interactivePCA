@@ -64,13 +64,11 @@ import pandas as pd
 from interactive_pca import (
     load_eigenvec,
     load_annotation,
-    load_eigenval,
 )
 
 # Load your data
 eigenvec, pcs, id_col = load_eigenvec('data/samples.eigenvec')
 annotation, ann_desc, ann_cols = load_annotation('data/samples.anno')
-eigenval = load_eigenval('data/samples.eigenval')
 
 # Work with your data
 print(eigenvec.head())
@@ -83,10 +81,6 @@ print(annotation.head())
 
 - `load_eigenvec(filepath, id_column)` - Load PLINK eigenvector file
 - `load_annotation(filepath, args)` - Load annotation file
-- `load_eigenval(filepath)` - Load eigenvalue file
-- `load_imiss(filepath)` - Load individual missing rate file
-- `load_lmiss(filepath)` - Load SNP missing rate file
-- `load_frq(filepath)` - Load allele frequency file
 - `merge_data(eigenvec, annotation, ...)` - Merge eigenvector and annotation
 
 ### Utilities

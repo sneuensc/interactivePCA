@@ -9,8 +9,7 @@ Interactive PCA visualization with Dash - a Python package for interactive explo
 - **Time series plotting** with range selection
 - **Data tables** with filtering and selection
 - **Aesthetic customization** (colors, sizes, symbols)
-- **Multiple data formats** support (PLINK eigenvec/eigenval, annotation files)
-- **Statistical visualizations** (missing rates, allele frequencies)
+- **Multiple data formats** support (PLINK eigenvec, annotation files)
 - **Web-based dashboard** using Dash
 
 ## Installation
@@ -92,12 +91,7 @@ sample1	Germany	2020	51.5	10.0	modern
 sample2	Sweden	2021	60.0	15.0	modern
 ```
 
-### Eigenvalue file (PLINK format)
-```
-0.0234
-0.0145
-0.0089
-```
+
 
 ## Package Structure
 

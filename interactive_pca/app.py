@@ -6,17 +6,146 @@ import logging
 import os
 import json
 import copy
+import pandas as pd
 import dash
 import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, State, ALL
 import plotly.express as px
 
 from .data_loader import (
-    load_eigenvec, load_annotation, load_eigenval,
-    load_imiss, load_lmiss, load_frq, merge_data
+    load_eigenvec, load_annotation, merge_data
 )
 from .utils import strip_ansi
-from .plots import create_initial_pca_plot, create_geographical_map
+from .plots import create_initial_pca_plot, create_initial_3d_pca_plot, create_geographical_map
+
+
+
+
+def build_hover_text(df, annotation_desc, group=None, detailed=False, selected_columns=None, group_color_map=None):
+    """
+    Build hover text for points in plots.
+    
+    Args:
+        df: DataFrame with data
+        annotation_desc: DataFrame describing annotation columns
+        group: Currently selected group column (for displaying in minimal hover)
+        detailed: If True, include all annotation columns; if False, only include id and group
+        selected_columns: List of specific columns to display in detailed hover (from annotation table)
+        group_color_map: Dictionary mapping group values to colors for coloring group text
+    
+    Returns:
+        List of hover text strings with HTML formatting
+    """
+    hover_texts = []
+    
+    if not detailed or annotation_desc is None:
+        # Minimal hover - show ID and group (if available and selected)
+        for idx, row in df.iterrows():
+            text_parts = [f"<b>ID:</b> {row['id']}"]
+            if group and group != 'none' and group in df.columns:
+                group_val = row[group]
+                if pd.notna(group_val):
+                    # Color both group name and value if color map is available
+                    # Try both str(group_val) and group_val as keys
+                    color = None
+                    if group_color_map:
+                        color = group_color_map.get(str(group_val)) or group_color_map.get(group_val)
+                    
+                    if color:
+                        text_parts.append(f"<span style='color:{color}'><b>{group}:</b> {group_val}</span>")
+                    else:
+                        text_parts.append(f"<b>{group}:</b> {group_val}")
+            hover_texts.append("<br>".join(text_parts))
+        return hover_texts
+    
+    # Build detailed hover text from selected columns or annotation columns
+    if selected_columns:
+        # Use only the selected columns from the annotation table
+        display_cols = [col for col in selected_columns if col in df.columns]
+    else:
+        # Fallback: use all from annotation_desc
+        display_cols = []
+        if 'Abbreviation' in annotation_desc.columns:
+            display_cols = annotation_desc['Abbreviation'].dropna().tolist()
+        else:
+            display_cols = [col for col in annotation_desc.columns if col != 'id']
+        display_cols = [col for col in display_cols if col in df.columns]
+    
+    for idx, row in df.iterrows():
+        text_parts = [f"<b>ID:</b> {row['id']}"]
+        # Always add group first if available (for detailed hover)
+        if group and group != 'none' and group in df.columns:
+            group_val = row[group]
+            if pd.notna(group_val):
+                # Color both group name and value if color map is available
+                # Try both str(group_val) and group_val as keys
+                color = None
+                if group_color_map:
+                    color = group_color_map.get(str(group_val)) or group_color_map.get(group_val)
+                
+                if color:
+                    text_parts.append(f"<span style='color:{color}'><b>{group}:</b> {group_val}</span>")
+                else:
+                    text_parts.append(f"<b>{group}:</b> {group_val}")
+        for col in display_cols:
+            val = row[col]
+            if pd.notna(val):
+                text_parts.append(f"<b>{col}:</b> {val}")
+        hover_texts.append("<br>".join(text_parts))
+    
+    return hover_texts
+
+
+def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed=False, selected_columns=None, group_color_map=None, plot_type='pca'):
+    """
+    Update hover text in a figure based on detailed flag.
+    
+    Args:
+        fig: Plotly figure object or dict
+        df: DataFrame with data
+        annotation_desc: DataFrame describing annotation columns
+        group: Currently selected group column (for displaying in minimal hover)
+        detailed: If True, use detailed hover; otherwise minimal
+        selected_columns: List of columns to display in detailed hover
+        group_color_map: Dictionary mapping group values to colors
+        plot_type: Type of plot ('pca', 'map', or 'time')
+    
+    Returns:
+        Updated figure (dict)
+    """
+    if fig is None or not fig.get('data'):
+        return fig
+    
+    # Build hover text for all points in the dataframe
+    all_hover_texts = build_hover_text(df, annotation_desc, group, detailed, selected_columns, group_color_map)
+    
+    # Create a mapping from ID to hover text
+    id_to_hover = dict(zip(df['id'], all_hover_texts))
+    
+    # Update each trace with hover text based on its customdata (which contains IDs)
+    for trace in fig.get('data', []):
+        customdata = trace.get('customdata', [])
+        
+        if customdata is None or len(customdata) == 0:
+            continue
+        
+        # Match hover texts to this trace's customdata (IDs)
+        trace_hover_texts = [id_to_hover.get(cdata, f"<b>ID:</b> {cdata}") for cdata in customdata]
+        
+        # Set hovertext and override hovertemplate
+        trace['hovertext'] = trace_hover_texts
+        trace['hoverinfo'] = 'text'
+        trace['hovertemplate'] = '%{hovertext}<extra></extra>'
+    
+    # Add consistent hoverlabel styling to all plots
+    if 'layout' not in fig:
+        fig['layout'] = {}
+    fig['layout']['hoverlabel'] = dict(
+        bgcolor='white',
+        font_color='#333',
+        namelength=-1
+    )
+    return fig
 
 
 def create_app(args):
@@ -36,12 +165,6 @@ def create_app(args):
     
     # Load eigenvectors (required)
     eigenvec, pcs, eigenvec_id = load_eigenvec(args.eigenvec, args.eigenvecID)
-    
-    # Load optional files
-    eigenval = load_eigenval(args.eigenval) if args.eigenval else None
-    df_imiss = load_imiss(args.imiss) if args.imiss else None
-    df_lmiss = load_lmiss(args.lmiss) if args.lmiss else None
-    df_frq = load_frq(args.frq) if args.frq else None
     
     # Load annotation
     annotation = None
@@ -129,7 +252,7 @@ def create_app(args):
     
     # Build layout
     layout_data = create_layout(
-        args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
+        args, df, pcs,
         annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
         init_selected_ids, init_group, init_continuous, init_aesthetics,
         dropdown_group_list, dropdown_list_continuous
@@ -156,6 +279,124 @@ def create_app(args):
         Output('tabs-content', 'children'),
         Input('tabs', 'value')
     )
+    
+    # Callback: Update selection counter
+    @app.callback(
+        Output('selection-counter', 'children'),
+        Input('selection-store', 'data')
+    )
+    def update_selection_counter(selected_indexes):
+        """Update the selection counter display."""
+        count = len(selected_indexes) if selected_indexes else 0
+        return f'Selected: {count}'
+    
+    # Callback: Update hover-detailed store when checkbox changes
+    @app.callback(
+        Output('hover-detailed', 'data'),
+        Input('hover-detailed-toggle', 'value')
+    )
+    def update_hover_detailed(hover_toggle):
+        """Update hover-detailed store based on checkbox."""
+        return 'hover_detailed' in hover_toggle if hover_toggle else False
+    
+    # Callback: Update selected annotation columns store
+    @app.callback(
+        Output('selected-annotation-columns', 'data'),
+        Input('annotation-table', 'selectedRows'),
+        prevent_initial_call=True
+    )
+    def update_selected_annotation_columns(selected_rows):
+        """Track which annotation columns are selected for detailed hover."""
+        if not selected_rows:
+            return []
+        # Extract the 'Abbreviation' field from selected rows
+        selected_cols = [row.get('Abbreviation') for row in selected_rows if row.get('Abbreviation')]
+        return selected_cols
+    
+    # Callback: Save selected IDs to file
+    @app.callback(
+        Input('save-selection', 'n_clicks'),
+        State('selection-store', 'data'),
+        prevent_initial_call=True
+    )
+    def save_selection(n_clicks, selected_indexes):
+        """Save selected IDs to a file."""
+        if not selected_indexes:
+            logging.warning("No selection to save")
+            return
+        
+        try:
+            # Convert indexes to IDs
+            if not isinstance(selected_indexes, list) or not selected_indexes:
+                logging.warning("Invalid selection data")
+                return
+            
+            selected_ids = df.iloc[selected_indexes]['id'].tolist()
+            
+            # Check for uniqueness
+            if len(selected_ids) != len(set(selected_ids)):
+                logging.error("IDs are not unique!")
+                return
+            
+            # Save to file
+            output_file = 'selected_ids.txt'
+            with open(output_file, 'w') as f:
+                for sid in selected_ids:
+                    f.write(f"{sid}\n")
+            
+            logging.info(f"Saved {len(selected_ids)} selected IDs to {output_file}")
+        except Exception as e:
+            logging.error(f"Error saving selection: {str(e)}")
+    
+    # Callback: Select all samples
+    @app.callback(
+        Output('selection-store', 'data', allow_duplicate=True),
+        Input('select-all-button', 'n_clicks'),
+        prevent_initial_call=True
+    )
+    def select_all_samples(n_clicks):
+        """Select all samples in the dataset."""
+        return list(range(len(df)))
+    
+    # Callback: Filter PCA annotation table and sync selection based on pandas query
+    @app.callback(
+        Output('selection-store', 'data', allow_duplicate=True),
+        Output('pca-filter-error-message', 'children'),
+        Input('pca-filter-query', 'value'),
+        prevent_initial_call=True
+    )
+    def filter_pca_table_and_sync_selection(query_string):
+        """Filter samples based on pandas query and update selection."""
+        import pandas as pd
+        
+        # If no query, select all
+        if not query_string or query_string.strip() == '':
+            return list(range(len(df))), ""
+        
+        # Try to apply the query
+        try:
+            filtered_df = df.query(query_string)
+            selected_indexes = filtered_df.index.tolist()
+            return selected_indexes, ""
+        except Exception as e:
+            # Keep current selection and show error
+            return dash.no_update, f"Query error: {str(e)}"
+    
+    # Callback: Update legend toggle visibility when group changes
+    @app.callback(
+        Output('legend-toggle-container', 'style'),
+        Input('dropdown-group', 'value')
+    )
+    def update_legend_visibility(group):
+        """Show/hide legend toggle based on grouping."""
+        if group == 'none' or group not in df.columns:
+            return {'display': 'none'}
+        
+        n_unique = df[group].nunique()
+        if n_unique <= 1:
+            return {'display': 'none'}
+        
+        return {'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}
     
     # Callback to update PCA annotation table based on selected rows in annotation table
     @app.callback(
@@ -193,47 +434,347 @@ def create_app(args):
         ]
         return row_data, column_defs
     
-    # Callback for PCA plot updates (PC axes and grouping)
+    # Callback: Table selection -> selection store
+    @app.callback(
+        Output('selection-store', 'data', allow_duplicate=True),
+        Input('pca-annotation-table', 'selectedRows'),
+        prevent_initial_call=True
+    )
+    def table_to_selection_store(selected_rows):
+        """Convert selected rows in table to row indexes."""
+        if not selected_rows:
+            return []
+        
+        # AG Grid returns selected row data; optimize for large datasets
+        selected_indexes = []
+        if selected_rows:
+            # Try to match by ID if available
+            if 'id' in df.columns and all('id' in row for row in selected_rows):
+                selected_ids = [row['id'] for row in selected_rows]
+                # Use set-based lookup for better performance with large selections
+                if len(selected_ids) > 50:
+                    selected_id_set = set(selected_ids)
+                    selected_indexes = [i for i, row_id in enumerate(df['id']) if row_id in selected_id_set]
+                else:
+                    selected_indexes = df.index[df['id'].isin(selected_ids)].tolist()
+            else:
+                # Fallback: match by position
+                selected_indexes = list(range(len(selected_rows)))
+        
+        return selected_indexes
+    
+    # Callback: Update table to highlight selected rows
+    @app.callback(
+        Output('pca-annotation-table', 'selectedRows'),
+        Input('selection-store', 'data'),
+        State('pca-annotation-table', 'rowData'),
+        prevent_initial_call=True
+    )
+    def update_table_selection(selected_indexes, row_data):
+        """Update table to highlight selected rows."""
+        if not selected_indexes or not row_data:
+            return []
+        
+        # Return the row data objects for selected indexes
+        selected_set = set(selected_indexes)
+        selected_rows = [row_data[i] for i in selected_set if i < len(row_data)]
+        return selected_rows
+    
+    # Callback to show/hide Z-axis dropdown based on 3D toggle
+    @app.callback(
+        Output('z-axis-container', 'style'),
+        Input('pca-3d-toggle', 'value')
+    )
+    def toggle_z_axis_visibility(is_3d):
+        """Show Z-axis dropdown when 3D is enabled."""
+        display_style = {'display': 'flex', 'alignItems': 'center', 'marginRight': '12px'}
+        hidden_style = {'display': 'none', 'alignItems': 'center', 'marginRight': '12px'}
+        return display_style if 'enable_3d' in is_3d else hidden_style
+    
+    # Callback for PCA plot regeneration (only when axes, grouping, or 3D toggle changes)
     @app.callback(
         Output('pca-plot', 'figure'),
+        Output('trace-map', 'data'),
         Input('dropdown-pc-x', 'value'),
         Input('dropdown-pc-y', 'value'),
+        Input('dropdown-pc-z', 'value'),
         Input('dropdown-group', 'value'),
-        Input('marker-aesthetics-store', 'data')
+        Input('pca-3d-toggle', 'value'),
+        State('marker-aesthetics-store', 'data'),
+        State('hover-detailed', 'data'),
+        State('selected-annotation-columns', 'data'),
+        State('selection-store', 'data'),
+        prevent_initial_call=False
     )
-    def update_pca_plot(pc_x, pc_y, group, aesthetics_store):
+    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, hover_detailed, selected_cols, selected_indexes):
+        """Regenerate PCA figure only when structure changes (axes, grouping, 3D mode)."""
+        import json
+        
+        # Get current aesthetics
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
-        fig = create_initial_pca_plot(
-            df=df,
-            x_col=pc_x,
-            y_col=pc_y,
-            group=group,
-            aesthetics_group=aesthetics
-        )
+        
+        # Create 3D or 2D plot based on toggle
+        if 'enable_3d' in is_3d:
+            fig = create_initial_3d_pca_plot(
+                df=df,
+                x_col=pc_x,
+                y_col=pc_y,
+                z_col=pc_z,
+                group=group,
+                aesthetics_group=aesthetics
+            )
+        else:
+            fig = create_initial_pca_plot(
+                df=df,
+                x_col=pc_x,
+                y_col=pc_y,
+                group=group,
+                aesthetics_group=aesthetics
+            )
+        
         is_categorical = (
             group != 'none'
             and group in df.columns
             and df[group].dtype.kind not in 'fi'
         )
-        fig.update_layout(
-            autosize=True,
-            margin=dict(l=50, r=140 if is_categorical else 20, t=40, b=40),
-            legend=dict(
-                x=1.02 if is_categorical else 0.02,
-                y=1 if is_categorical else 0.98,
-                xanchor='left',
-                yanchor='top'
+        
+        # Determine if legend should be shown (only if categorical and more than 1 unique value)
+        show_legend = False
+        if is_categorical:
+            n_unique = df[group].nunique()
+            show_legend = n_unique > 1
+        
+        # Update layout
+        if 'enable_3d' not in is_3d:
+            fig.update_layout(
+                autosize=True,
+                margin=dict(l=50, r=140 if (is_categorical and show_legend) else 20, t=40, b=40),
+                legend=dict(
+                    visible=show_legend,
+                    x=1.02 if is_categorical else 0.02,
+                    y=1 if is_categorical else 0.98,
+                    xanchor='left',
+                    yanchor='top'
+                ),
+                dragmode='lasso',
+                hovermode='closest',
+                hoverlabel=dict(
+                    bgcolor='white',
+                    font_color='#333',
+                    namelength=-1
+                )
             )
-        )
-        return fig
+        else:
+            fig.update_layout(
+                autosize=True,
+                legend=dict(
+                    visible=show_legend,
+                    x=1.02 if is_categorical else 0.02,
+                    y=1 if is_categorical else 0.98,
+                    xanchor='left',
+                    yanchor='top'
+                ),
+                hovermode='closest',
+                hoverlabel=dict(
+                    bgcolor='white',
+                    font_color='#333',
+                    namelength=-1
+                )
+            )
+        
+        # Store trace map for fast updates: trace_name -> index
+        trace_map = {trace.name: i for i, trace in enumerate(fig.data)}
+        
+        # Apply hover formatting with current settings
+        fig_dict = fig.to_dict()
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
+        
+        # Preserve selection when regenerating figure
+        if selected_indexes:
+            import numpy as np
+            selected_set = set(selected_indexes)
+            for trace in fig_dict.get('data', []):
+                n_points = len(trace.get('x', []))
+                if n_points > 0:
+                    indexes = np.arange(n_points)
+                    trace['selectedpoints'] = indexes[np.isin(indexes, list(selected_set))].tolist()
+        
+        return fig_dict, json.dumps(trace_map)
+    
+    # Callback for PCA legend visibility toggle (fast update)
+    @app.callback(
+        Output('pca-plot', 'figure', allow_duplicate=True),
+        Input('pca-legend-toggle', 'value'),
+        State('pca-plot', 'figure'),
+        prevent_initial_call=True
+    )
+    def update_pca_legend_visibility(show_legend, current_fig):
+        """Fast update of legend visibility without regenerating figure."""
+        if current_fig is None:
+            return current_fig
+        
+        show_legend_flag = 'show_legend' in show_legend
+        
+        # Get margin from current layout or default
+        try:
+            is_categorical = current_fig['layout'].get('legend', {}).get('title') not in (None, 'none', '')
+        except:
+            is_categorical = False
+        
+        # Adjust right margin based on legend visibility
+        r_margin = 140 if is_categorical and show_legend_flag else 20
+        
+        current_fig['layout']['legend']['visible'] = show_legend_flag
+        current_fig['layout']['margin']['r'] = r_margin
+        
+        return current_fig
+    
+    # Callback for PCA plot hover templates update
+    @app.callback(
+        Output('pca-plot', 'figure', allow_duplicate=True),
+        Input('hover-detailed', 'data'),
+        State('pca-plot', 'figure'),
+        State('dropdown-group', 'value'),
+        State('selected-annotation-columns', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_pca_hover(hover_detailed, current_fig, group, selected_cols, aesthetics_store):
+        """Update PCA plot hover templates based on detailed flag."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
+    
+    # Callback for map plot hover templates update
+    @app.callback(
+        Output('pca-map-plot', 'figure', allow_duplicate=True),
+        Input('hover-detailed', 'data'),
+        State('pca-map-plot', 'figure'),
+        State('dropdown-group', 'value'),
+        State('selected-annotation-columns', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_map_hover(hover_detailed, current_fig, group, selected_cols, aesthetics_store):
+        """Update map plot hover templates based on detailed flag."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map')
+    
+    # Callback for time histogram hover templates update
+    @app.callback(
+        Output('time-histogram', 'figure', allow_duplicate=True),
+        Input('hover-detailed', 'data'),
+        State('time-histogram', 'figure'),
+        State('dropdown-group', 'value'),
+        State('selected-annotation-columns', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_time_hover(hover_detailed, current_fig, group, selected_cols, aesthetics_store):
+        """Update time histogram hover templates based on detailed flag."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time')
+    
+    # Callback for PCA plot hover update when group changes
+    @app.callback(
+        Output('pca-plot', 'figure', allow_duplicate=True),
+        Input('dropdown-group', 'value'),
+        State('pca-plot', 'figure'),
+        State('hover-detailed', 'data'),
+        State('selected-annotation-columns', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_pca_hover_on_group_change(group, current_fig, hover_detailed, selected_cols, aesthetics_store):
+        """Update PCA plot hover when group selection changes."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
+    
+    # Callback for map plot hover update when group changes
+    @app.callback(
+        Output('pca-map-plot', 'figure', allow_duplicate=True),
+        Input('dropdown-group', 'value'),
+        State('pca-map-plot', 'figure'),
+        State('hover-detailed', 'data'),
+        State('selected-annotation-columns', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_map_hover_on_group_change(group, current_fig, hover_detailed, selected_cols, aesthetics_store):
+        """Update map plot hover when group selection changes."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map')
+    
+    # Callback for PCA plot hover update when selected columns change
+    @app.callback(
+        Output('pca-plot', 'figure', allow_duplicate=True),
+        Input('selected-annotation-columns', 'data'),
+        State('pca-plot', 'figure'),
+        State('dropdown-group', 'value'),
+        State('hover-detailed', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_pca_hover_on_columns_change(selected_cols, current_fig, group, hover_detailed, aesthetics_store):
+        """Update PCA plot hover when selected columns change."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
+    
+    # Callback for map plot hover update when selected columns change
+    @app.callback(
+        Output('pca-map-plot', 'figure', allow_duplicate=True),
+        Input('selected-annotation-columns', 'data'),
+        State('pca-map-plot', 'figure'),
+        State('dropdown-group', 'value'),
+        State('hover-detailed', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_map_hover_on_columns_change(selected_cols, current_fig, group, hover_detailed, aesthetics_store):
+        """Update map plot hover when selected columns change."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map')
+    
+    # Callback for time histogram hover update when selected columns change
+    @app.callback(
+        Output('time-histogram', 'figure', allow_duplicate=True),
+        Input('selected-annotation-columns', 'data'),
+        State('time-histogram', 'figure'),
+        State('dropdown-group', 'value'),
+        State('hover-detailed', 'data'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def update_time_hover_on_columns_change(selected_cols, current_fig, group, hover_detailed, aesthetics_store):
+        """Update time histogram hover when selected columns change."""
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time')
+    
+    # Callback for PCA plot selection -> selection store
+    @app.callback(
+        Output('selection-store', 'data'),
+        Input('pca-plot', 'selectedData'),
+        prevent_initial_call=True
+    )
+    def pca_plot_to_selection_store(selected_data):
+        """Convert clicked/lasso points on PCA plot to row indexes."""
+        if not selected_data or 'points' not in selected_data or not selected_data['points']:
+            return []
+        
+        # Extract row indexes from pointIndex
+        selected_indexes = [pt.get('pointIndex') for pt in selected_data['points']]
+        selected_indexes = [idx for idx in selected_indexes if idx is not None]
+        return sorted(list(set(selected_indexes)))
     
     # Callback for map plot updates (grouping only)
     @app.callback(
         Output('pca-map-plot', 'figure'),
         Input('dropdown-group', 'value'),
-        Input('marker-aesthetics-store', 'data')
+        Input('marker-aesthetics-store', 'data'),
+        State('hover-detailed', 'data'),
+        State('selected-annotation-columns', 'data')
     )
-    def update_map_plot(group, aesthetics_store):
+    def update_map_plot(group, aesthetics_store, hover_detailed, selected_cols):
         if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
             return {}
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
@@ -257,9 +798,147 @@ def create_app(args):
                 y=1 if is_categorical else 0.98,
                 xanchor='left',
                 yanchor='top'
+            ),
+            dragmode='lasso',
+            hoverlabel=dict(
+                bgcolor='white',
+                font_color='#333',
+                namelength=-1
             )
         )
-        return fig
+        
+        # Apply hover formatting with current settings
+        fig_dict = fig.to_dict()
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map')
+        
+        return fig_dict
+    
+    # Callback: Map plot selection -> selection store
+    @app.callback(
+        Output('selection-store', 'data', allow_duplicate=True),
+        Input('pca-map-plot', 'selectedData'),
+        prevent_initial_call=True
+    )
+    def map_plot_to_selection_store(selected_data):
+        """Convert clicked/lasso points on map to row indexes."""
+        if not selected_data or 'points' not in selected_data or not selected_data['points']:
+            return []
+        
+        # Extract row indexes from pointIndex
+        selected_indexes = [pt.get('pointIndex') for pt in selected_data['points']]
+        selected_indexes = [idx for idx in selected_indexes if idx is not None]
+        return sorted(list(set(selected_indexes)))
+    
+    # Callback: Update PCA plot to highlight selected points
+    @app.callback(
+        Output('pca-plot', 'figure', allow_duplicate=True),
+        Input('selection-store', 'data'),
+        Input('dropdown-pc-x', 'value'),
+        Input('dropdown-pc-y', 'value'),
+        Input('dropdown-group', 'value'),
+        Input('marker-aesthetics-store', 'data'),
+        State('pca-plot', 'figure'),
+        prevent_initial_call=True
+    )
+    def update_pca_selection(selected_indexes, pc_x, pc_y, group, aesthetics_store, current_fig):
+        """Update PCA plot to highlight selected rows."""
+        import numpy as np
+        
+        if current_fig is None:
+            return {}
+        
+        # Mark selected points in all traces
+        selected_set = set(selected_indexes) if selected_indexes else set()
+        
+        for trace in current_fig.get('data', []):
+            n_points = len(trace.get('x', []))
+            if n_points > 0:
+                # Use NumPy for better performance with large datasets
+                if selected_set:
+                    indexes = np.arange(n_points)
+                    trace['selectedpoints'] = indexes[np.isin(indexes, list(selected_set))].tolist()
+                else:
+                    trace['selectedpoints'] = []
+        
+        return current_fig
+    
+    # Callback: Update map plot to highlight selected points
+    @app.callback(
+        Output('pca-map-plot', 'figure', allow_duplicate=True),
+        Input('selection-store', 'data'),
+        Input('dropdown-group', 'value'),
+        Input('marker-aesthetics-store', 'data'),
+        State('pca-map-plot', 'figure'),
+        prevent_initial_call=True
+    )
+    def update_map_selection(selected_indexes, group, aesthetics_store, current_fig):
+        """Update map plot to highlight selected rows."""
+        import numpy as np
+        
+        if current_fig is None:
+            return {}
+        
+        # Mark selected points in all traces
+        selected_set = set(selected_indexes) if selected_indexes else set()
+        
+        for trace in current_fig.get('data', []):
+            n_points = len(trace.get('lon', []))
+            if n_points > 0:
+                # Use NumPy for better performance with large datasets
+                if selected_set:
+                    indexes = np.arange(n_points)
+                    trace['selectedpoints'] = indexes[np.isin(indexes, list(selected_set))].tolist()
+                else:
+                    trace['selectedpoints'] = []
+        
+        return current_fig
+    
+    # Callback: Time histogram selection -> selection store
+    @app.callback(
+        Output('selection-store', 'data', allow_duplicate=True),
+        Input('time-histogram', 'selectedData'),
+        prevent_initial_call=True
+    )
+    def time_plot_to_selection_store(selected_data):
+        """Convert selected points in time scatter to row indexes."""
+        if not selected_data or 'points' not in selected_data or not selected_data['points']:
+            return []
+        
+        # Extract row indexes from customdata
+        selected_indexes = [pt.get('customdata') for pt in selected_data['points']]
+        selected_indexes = [idx for idx in selected_indexes if idx is not None]
+        return sorted(list(set(selected_indexes)))
+    
+    # Callback: Update time histogram to highlight selected points
+    @app.callback(
+        Output('time-histogram', 'figure', allow_duplicate=True),
+        Input('selection-store', 'data'),
+        State('time-histogram', 'figure'),
+        prevent_initial_call=True
+    )
+    def update_time_selection(selected_indexes, current_fig):
+        """Update time histogram to highlight selected rows."""
+        import numpy as np
+        
+        if current_fig is None:
+            return {}
+        
+        # Mark selected points in all traces using customdata
+        selected_set = set(selected_indexes) if selected_indexes else set()
+        
+        for trace in current_fig.get('data', []):
+            customdata = trace.get('customdata', [])
+            if customdata and selected_set:
+                # Use NumPy for faster lookup performance
+                customdata_array = np.array(customdata)
+                selected_set_array = np.array(list(selected_set))
+                mask = np.isin(customdata_array, selected_set_array)
+                trace['selectedpoints'] = np.where(mask)[0].tolist()
+            else:
+                trace['selectedpoints'] = []
+        
+        return current_fig
     
     # Callback for time histogram updates (grouping, mode, and selection)
     @app.callback(
@@ -268,9 +947,11 @@ def create_app(args):
         Input('time-viz-mode', 'value'),
         Input('time-variable', 'value'),
         Input('pca-plot', 'selectedData'),
-        Input('marker-aesthetics-store', 'data')
+        Input('marker-aesthetics-store', 'data'),
+        State('hover-detailed', 'data'),
+        State('selected-annotation-columns', 'data')
     )
-    def update_time_histogram(group, viz_mode, time_variable, selected_data, aesthetics_store):
+    def update_time_histogram(group, viz_mode, time_variable, selected_data, aesthetics_store, hover_detailed, selected_cols):
         import plotly.graph_objects as go
         import numpy as np
         import pandas as pd
@@ -281,6 +962,9 @@ def create_app(args):
         time_vals = df[time_variable].dropna()
         if time_vals.empty:
             return {}
+        
+        # Get IDs corresponding to the time values
+        time_ids = df.loc[time_vals.index, 'id'].tolist()
         
         # Get selected IDs if any
         selected_ids = []
@@ -300,12 +984,12 @@ def create_app(args):
                 x=time_vals, 
                 nbinsx=50, 
                 marker=dict(color=default_color),
-                name='All samples'
+                name='All samples',
+                showlegend=False
             ))
             fig.update_layout(
                 xaxis_title=time_variable,
                 yaxis_title="Count",
-                showlegend=False,
                 autosize=True
             )
             
@@ -334,7 +1018,10 @@ def create_app(args):
                             showscale=True,
                             colorbar=dict(title=group)
                         ),
-                        name='All samples'
+                        customdata=time_ids,
+                        hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
+                        name='All samples',
+                        showlegend=False
                     ))
                 else:
                     # Categorical variable - use group colors
@@ -345,6 +1032,7 @@ def create_app(args):
                     unique_vals = [val for val in group_vals.unique() if not pd.isna(val)]
                     for val in unique_vals:
                         mask = group_vals == val
+                        subset_ids = [time_ids[i] for i in range(len(time_ids)) if mask.iloc[i]]
                         fig.add_trace(go.Scatter(
                             x=time_vals[mask],
                             y=jitter[mask.to_numpy()],
@@ -355,8 +1043,10 @@ def create_app(args):
                                 opacity=opacity_map.get(str(val), default_opacity),
                                 symbol=symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle'))
                             ),
+                            customdata=subset_ids,
+                            hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
                             name=str(val),
-                            showlegend=True
+                            showlegend=False
                         ))
             else:
                 fig.add_trace(go.Scatter(
@@ -364,56 +1054,39 @@ def create_app(args):
                     y=jitter,
                     mode='markers',
                     marker=dict(color=default_color, size=default_size, opacity=default_opacity),
-                    name='All samples'
+                    customdata=time_ids,
+                    hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
+                    name='All samples',
+                    showlegend=False
                 ))
             fig.update_layout(
                 xaxis_title=time_variable,
                 yaxis_title="",
                 yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-                showlegend=(
-                    group != 'none'
-                    and group in df.columns
-                    and df[group].dtype.kind not in 'fi'
-                ),
                 autosize=True,
-                legend=dict(
-                    x=1.02,
-                    y=1,
-                    xanchor='left',
-                    yanchor='top'
-                ) if (
-                    group != 'none'
-                    and group in df.columns
-                    and df[group].dtype.kind not in 'fi'
-                ) else dict(x=0.02, y=0.98, xanchor='left', yanchor='top'),
+                dragmode='lasso',
                 margin=dict(
                     l=50,
-                    r=140 if (
-                        group != 'none'
-                        and group in df.columns
-                        and df[group].dtype.kind not in 'fi'
-                    ) else 20,
+                    r=20,
                     t=40,
                     b=40
                 )
             )
             
         elif viz_mode == 'overlay':
-            # Overlapping histograms: selected vs all
-            unselected_color = aesthetics['color'].get('unselected', 'lightgray')
-            selected_color = default_color
+            # Overlapping histograms: all vs selected (from notebook approach)
+            # All samples (gray)
+            fig.add_trace(go.Histogram(
+                x=time_vals,
+                nbinsx=50,
+                marker_color='lightgray',
+                opacity=0.6,
+                name='All',
+                showlegend=False
+            ))
             
+            # Selected samples (color)
             if selected_ids and len(selected_ids) > 0:
-                # All samples (unselected style)
-                fig.add_trace(go.Histogram(
-                    x=time_vals,
-                    nbinsx=50,
-                    marker=dict(color=unselected_color, line=dict(color='gray', width=1)),
-                    name='All samples',
-                    opacity=0.6
-                ))
-                
-                # Selected samples (default style)
                 if 'id' in df.columns:
                     selected_time = df[df['id'].isin(selected_ids)][time_variable].dropna()
                 else:
@@ -424,41 +1097,39 @@ def create_app(args):
                     fig.add_trace(go.Histogram(
                         x=selected_time,
                         nbinsx=50,
-                        marker=dict(color=selected_color, line=dict(color=selected_color, width=1)),
-                        name='Selected samples',
-                        opacity=0.8
+                        marker_color='#1F77B4',
+                        opacity=0.9,
+                        name='Selected',
+                        showlegend=False
                     ))
-                
-                fig.update_layout(
-                    xaxis_title=time_variable,
-                    yaxis_title="Count",
-                    barmode='overlay',
-                    showlegend=True,
-                    legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)'),
-                    autosize=True
-                )
-            else:
-                # No selection, show all
-                fig.add_trace(go.Histogram(
-                    x=time_vals,
-                    nbinsx=50,
-                    marker=dict(color=default_color),
-                    name='All samples'
-                ))
-                fig.update_layout(
-                    xaxis_title=time_variable,
-                    yaxis_title="Count",
-                    showlegend=False,
-                    autosize=True
-                )
+            
+            fig.update_layout(
+                barmode='overlay',
+                yaxis_title='Count',
+                xaxis_title=time_variable,
+                autosize=True
+            )
         
         fig.update_layout(
             template='plotly_white',
-            margin=dict(l=50, r=20, t=40, b=40)
+            margin=dict(l=50, r=20, t=40, b=40),
+            dragmode='lasso',
+            hoverlabel=dict(
+                bgcolor='white',
+                font_color='#333',
+                namelength=-1
+            )
         )
         if time_variable == ANNOTATION_TIME:
             fig.update_xaxes(autorange='reversed')
-        return fig
+        
+        # Apply hover text formatting (same as hover callbacks do)
+        # Convert Figure to dict before updating hover templates
+        fig_dict = fig.to_dict()
+        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+        fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time')
+        
+        return fig_dict
     
     # Register callbacks (would be imported from callbacks.py)
     # from .callbacks import register_callbacks
@@ -1213,7 +1884,7 @@ def get_aesthetics_for_group(args, group, df, store_data):
     return get_init_aesthetics(args, group, df)
 
 
-def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
+def create_layout(args, df, pcs,
                  annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
                  init_selected_ids, init_group, init_continuous, init_aesthetics,
                  dropdown_group_list, dropdown_list_continuous):
@@ -1224,10 +1895,6 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
         args: Command-line arguments
         df: Main DataFrame
         pcs: List of PC column names
-        eigenval: Eigenvalue DataFrame
-        df_imiss: Individual missing rate DataFrame
-        df_lmiss: SNP missing rate DataFrame
-        df_frq: Frequency DataFrame
         annotation_desc: Annotation description DataFrame
         ANNOTATION_TIME: Time column name
         ANNOTATION_LAT: Latitude column name
@@ -1269,7 +1936,7 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
         'value': 'pca_tab',
         'content': create_pca_tab(
             pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
-            df, init_aesthetics, ANNOTATION_LONG, annotation_columns, continuous_columns
+            df, init_aesthetics, ANNOTATION_LONG, annotation_columns, continuous_columns, annotation_desc
         )
     })
     
@@ -1284,22 +1951,89 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
     # Help tab
     from .args import create_parser
     parser = create_parser()
+    
+    help_content = html.Div([
+        # User guide section
+        html.Div([
+            html.H3('Interactive PCA Visualization - User Guide', style={'marginBottom': '20px'}),
+            
+            html.H4('Overview', style={'marginTop': '20px'}),
+            html.P([
+                'This application provides interactive visualization of Principal Component Analysis (PCA) results ',
+                'with support for geographical mapping, temporal data, and rich annotations.'
+            ]),
+            
+            html.H4('Key Features', style={'marginTop': '20px'}),
+            html.Ul([
+                html.Li([html.Strong('PCA Plot: '), 'Visualize samples in PC space with 2D or 3D views. Select PC axes, group samples by variables, and use lasso/box selection.']),
+                html.Li([html.Strong('Geographical Map: '), 'View sample locations on an interactive map (requires latitude/longitude data).']),
+                html.Li([html.Strong('Time Plot: '), 'Explore temporal distributions with scatter, histogram, or overlay views.']),
+                html.Li([html.Strong('Annotation Table: '), 'Browse and filter sample metadata. Select visible columns to customize hover information.']),
+            ]),
+            
+            html.H4('Interactive Controls', style={'marginTop': '20px'}),
+            html.Ul([
+                html.Li([html.Strong('Group by: '), 'Color and group samples by any categorical or continuous variable.']),
+                html.Li([html.Strong('Hover detailed: '), 'Toggle between minimal hover info (ID + group) and detailed info (all selected annotation columns).']),
+                html.Li([html.Strong('Lasso selection: '), 'Select samples across all plots simultaneously.']),
+                html.Li([html.Strong('3D toggle: '), 'Switch between 2D and 3D PCA views.']),
+                html.Li([html.Strong('Legend toggle: '), 'Show/hide legends for categorical groupings.']),
+            ]),
+            
+            html.H4('Hover Information', style={'marginTop': '20px'}),
+            html.P([
+                'Hover over any point to see sample information. Use the "Hover detailed" checkbox in the PCA tab to toggle between:',
+            ]),
+            html.Ul([
+                html.Li([html.Strong('Minimal: '), 'Shows sample ID and group (colored by group).']),
+                html.Li([html.Strong('Detailed: '), 'Shows ID, group, and all columns selected in the Annotation table.']),
+            ]),
+            html.P([
+                'The columns displayed in detailed mode match your selection in the Annotation table. ',
+                'Select/deselect rows to customize which metadata appears in hover tooltips.'
+            ]),
+            
+            html.H4('Aesthetics', style={'marginTop': '20px'}),
+            html.P([
+                'Click "Aesthetics" in the PCA tab to customize colors, sizes, shapes, and opacity for each group value. ',
+                'For continuous variables, choose a color scale. For categorical variables, edit individual group aesthetics.'
+            ]),
+            
+            html.H4('Tips', style={'marginTop': '20px'}),
+            html.Ul([
+                html.Li('Use lasso or box selection to highlight samples across all plots simultaneously.'),
+                html.Li('The annotation table updates to show only selected samples.'),
+                html.Li('Export selections by filtering the annotation table and copying data.'),
+                html.Li('Customize hover information by selecting specific annotation columns in the table.'),
+                html.Li('Save aesthetic configurations to a JSON file for reuse with --aesthetics-file.'),
+            ]),
+            
+        ], style={
+            'backgroundColor': 'white',
+            'padding': '20px',
+            'marginBottom': '20px',
+            'borderRadius': '5px',
+            'border': '1px solid #dee2e6'
+        }),
+        
+        # Command-line parameters section
+        html.H3('Command-line Parameters', style={'marginBottom': '10px'}),
+        html.Pre(
+            strip_ansi(parser.format_help()),
+            style={
+                'backgroundColor': '#f8f9fa',
+                'padding': '10px',
+                'fontFamily': 'monospace',
+                'fontSize': '14px',
+                'whiteSpace': 'pre-wrap'
+            }
+        )
+    ], style={'height': '100%', 'overflow': 'auto', 'padding': '20px'})
+    
     tab_configs.append({
         'label': 'Help',
         'value': 'help_tab',
-        'content': html.Div(
-            html.Pre(
-                strip_ansi(parser.format_help()),
-                style={
-                    'backgroundColor': '#f8f9fa',
-                    'padding': '10px',
-                    'fontFamily': 'monospace',
-                    'fontSize': '14px',
-                    'whiteSpace': 'pre-wrap'
-                }
-            ),
-            style={'height': '100%', 'overflow': 'auto'}
-        )
+        'content': help_content
     })
     
     # Store tab content map for callback
@@ -1323,6 +2057,29 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
             base_aesthetics = get_init_aesthetics(args, group_name, df)
             init_store_data[group_name] = merge_aesthetics(base_aesthetics, all_file_aesthetics[group_name])
     
+    # Initialize selection with all row indexes (corresponding to init_selected_ids)
+    init_selected_indexes = df.index[df['id'].isin(init_selected_ids)].tolist()
+    
+    # Calculate initial selected annotation columns (first 10 rows, same as annotation table default)
+    init_selected_cols = []
+    if annotation_desc is not None:
+        import pandas as pd
+        annotation_desc_extended = annotation_desc.copy()
+        if pcs:
+            pc_rows = pd.DataFrame({
+                'Abbreviation': pcs,
+                'Description': pcs,
+                'Type': ['continuous'] * len(pcs),
+                'N_levels': [None] * len(pcs),
+                'Dropdown': ['Yes'] * len(pcs)
+            })
+            annotation_desc_extended = pd.concat([annotation_desc, pc_rows], ignore_index=True)
+        
+        # Get the first 10 abbreviations (matching the annotation table default selection)
+        first_10 = annotation_desc_extended.head(10)
+        if 'Abbreviation' in first_10.columns:
+            init_selected_cols = first_10['Abbreviation'].dropna().tolist()
+    
     # Main layout
     layout = html.Div([
         # Data stores
@@ -1332,6 +2089,9 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
         dcc.Store(id='trace-pca', data={}),
         dcc.Store(id='trace-map', data={}),
         dcc.Store(id='trace-time', data={}),
+        dcc.Store(id='selection-store', data=init_selected_indexes),  # Selected row indexes for cross-plot sync
+        dcc.Store(id='hover-detailed', data=False),  # Toggle for detailed hover information
+        dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
         
         # Header with tabs
         html.Div([
@@ -1373,7 +2133,7 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
                     'display': 'inline-block',
                     'verticalAlign': 'bottom'
                 }
-            )
+            ),
         ], style={
             'backgroundColor': '#f8f9fa',
             'borderBottom': '2px solid #dee2e6',
@@ -1409,8 +2169,15 @@ def create_layout(args, df, pcs, eigenval, df_imiss, df_lmiss, df_frq,
 
 
 def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
-                   df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None):
+                   df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None):
     """Create PCA tab layout with map on the right and extra panels below."""
+    # Determine if legend should be shown initially (only if group has multiple unique values)
+    init_show_legend = []
+    if init_group != 'none' and init_group in df.columns:
+        n_unique = df[init_group].nunique()
+        if n_unique > 1:
+            init_show_legend = ['show_legend']
+    
     # Generate initial PCA figure
     init_fig = create_initial_pca_plot(
         df=df,
@@ -1433,56 +2200,133 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     
     # Control dropdowns
     control_section = html.Div([
+        # Left side controls
         html.Div([
-            html.Label('X:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-            dcc.Dropdown(
-                id='dropdown-pc-x',
-                options=[{'label': pc, 'value': pc} for pc in pcs],
-                value=pcs[0],
-                clearable=False,
-                style={'width': '140px'}
+            html.Div([
+                html.Label('X:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                dcc.Dropdown(
+                    id='dropdown-pc-x',
+                    options=[{'label': pc, 'value': pc} for pc in pcs],
+                    value=pcs[0],
+                    clearable=False,
+                    style={'width': '100px'}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '12px'}),
+            html.Div([
+                html.Label('Y:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                dcc.Dropdown(
+                    id='dropdown-pc-y',
+                    options=[{'label': pc, 'value': pc} for pc in pcs],
+                    value=pcs[1],
+                    clearable=False,
+                    style={'width': '100px'}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '12px'}),
+            html.Div([
+                html.Label('Z:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                dcc.Dropdown(
+                    id='dropdown-pc-z',
+                    options=[{'label': pc, 'value': pc} for pc in pcs],
+                    value=pcs[2] if len(pcs) > 2 else pcs[0],
+                    clearable=False,
+                    style={'width': '100px'}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '12px', 'display': 'none'}, id='z-axis-container'),
+            html.Div([
+                dcc.Checklist(
+                    id='pca-3d-toggle',
+                    options=[{'label': ' 3D', 'value': 'enable_3d'}],
+                    value=[],
+                    style={'marginRight': '0px'},
+                    labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
+                )
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+            html.Div([
+                html.Label('Group by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                dcc.Dropdown(
+                    id='dropdown-group',
+                    options=[{'label': g, 'value': g} for g in dropdown_group_list],
+                    value=init_group,
+                    clearable=False,
+                    style={'width': '220px'}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+            html.Div([
+                dcc.Checklist(
+                    id='pca-legend-toggle',
+                    options=[{'label': ' Show Legend', 'value': 'show_legend'}],
+                    value=init_show_legend,
+                    style={'marginRight': '0px'},
+                    labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
+                )
+            ], id='legend-toggle-container', style={'display': 'none' if not init_show_legend else 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+            html.Div([
+                dcc.Checklist(
+                    id='hover-detailed-toggle',
+                    options=[{'label': ' Hover detailed', 'value': 'hover_detailed'}],
+                    value=[],
+                    style={'marginRight': '0px'},
+                    labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
+                )
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+            html.Button(
+                'Aesthetics',
+                id='open-aesthetics',
+                style={
+                    'padding': '6px 12px',
+                    'border': '1px solid #ccc',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#ffffff',
+                    'cursor': 'pointer'
+                }
+
             ),
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+        
+        # Right side controls
         html.Div([
-            html.Label('Y:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-            dcc.Dropdown(
-                id='dropdown-pc-y',
-                options=[{'label': pc, 'value': pc} for pc in pcs],
-                value=pcs[1],
-                clearable=False,
-                style={'width': '140px'}
+            html.Div(
+                id='selection-counter',
+                children='Selected: 0',
+                style={
+                    'marginRight': '16px',
+                    'fontSize': '13px',
+                    'color': '#333',
+                    'fontWeight': 'bold'
+                }
             ),
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
-        html.Div([
-            html.Label('Group by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-            dcc.Dropdown(
-                id='dropdown-group',
-                options=[{'label': g, 'value': g} for g in dropdown_group_list],
-                value=init_group,
-                clearable=False,
-                style={'width': '220px'}
+            html.Button(
+                'Select all',
+                id='select-all-button',
+                style={
+                    'padding': '6px 12px',
+                    'border': '1px solid #ccc',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#ffffff',
+                    'cursor': 'pointer',
+                    'marginRight': '8px'
+                }
             ),
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
-        html.Button(
-            'Aesthetics',
-            id='open-aesthetics',
-            style={
-                'padding': '6px 12px',
-                'border': '1px solid #ccc',
-                'borderRadius': '4px',
-                'backgroundColor': '#ffffff',
-                'cursor': 'pointer'
-            }
-        ),
+            html.Button(
+                'Save selection',
+                id='save-selection',
+                style={
+                    'padding': '6px 12px',
+                    'border': '1px solid #ccc',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#ffffff',
+                    'cursor': 'pointer'
+                }
+            ),
+        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
     ], style={
         'display': 'flex',
         'alignItems': 'center',
-        'gap': '8px',
+        'justifyContent': 'space-between',
         'marginBottom': '20px',
         'padding': '12px 15px',
         'backgroundColor': '#f8f9fa',
-        'borderRadius': '5px',
-        'flexWrap': 'wrap'
+        'borderRadius': '5px'
     })
     
     # PCA plot (left side)
@@ -1505,13 +2349,18 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 style={'padding': '10px', 'color': '#666'}
             )
         else:
+            # Create empty figure - callback will populate with correct mode (scatter, not histogram)
             fig_time = go.Figure()
-            fig_time.add_trace(go.Histogram(x=time_vals, nbinsx=50, marker=dict(color='steelblue')))
             fig_time.update_layout(
                 xaxis_title=default_continuous,
-                yaxis_title="Count",
+                yaxis_title="",
                 height=250,
-                template='plotly_white'
+                template='plotly_white',
+                hoverlabel=dict(
+                    bgcolor='white',
+                    font_color='#333',
+                    namelength=-1
+                )
             )
             if default_continuous == ANNOTATION_TIME:
                 fig_time.update_xaxes(autorange='reversed')
@@ -1526,13 +2375,13 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         clearable=False,
                         style={'width': '200px'}
                     ),
-                    html.Label('Visualization mode:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
+                    # html.Label('Mode:', style={'marginRight': '10px', 'fontWeight': 'bold'}),
                     dcc.RadioItems(
                         id='time-viz-mode',
                         options=[
-                            {'label': 'Scatter (jittered)', 'value': 'scatter'},
-                            {'label': 'Distribution', 'value': 'distribution'},
-                            {'label': 'Distribution with selection', 'value': 'overlay'}
+                            {'label': 'Scatter', 'value': 'scatter'},
+                            {'label': 'Histogram', 'value': 'distribution'},
+                            {'label': 'Histogram with selection', 'value': 'overlay'}
                         ],
                         value='scatter',
                         inline=True,
@@ -1711,12 +2560,33 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 html.Div(
                     id='pca-table-pane',
                     children=[
-                        html.H4("Annotation Table", style={'marginTop': '0', 'marginBottom': '10px'}),
-                        annotation_table
+                        annotation_table,
+                        # Filter section
+                        html.Div([
+                            html.H4("Filter Selection", style={'marginTop': '15px', 'marginBottom': '8px'}),
+                            dcc.Textarea(
+                                id='pca-filter-query',
+                                placeholder='Enter pandas query (e.g., "Country == \'France\'" or "PC1 > 0")...',
+                                style={
+                                    'width': '100%',
+                                    'height': '60px',
+                                    'fontSize': '12px',
+                                    'fontFamily': 'monospace',
+                                    'padding': '6px',
+                                    'border': '1px solid #ccc',
+                                    'borderRadius': '4px',
+                                    'resize': 'vertical'
+                                }
+                            ),
+                            html.Div(
+                                id='pca-filter-error-message',
+                                style={'color': 'red', 'fontSize': '11px', 'marginTop': '4px', 'minHeight': '16px'}
+                            )
+                        ], style={'marginTop': '15px', 'padding': '10px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'})
                     ],
                     style={
                         'flex': '0 0 40%',
-                        'overflow': 'hidden',
+                        'overflow': 'auto',
                         'display': 'flex',
                         'flexDirection': 'column'
                     },
@@ -1729,6 +2599,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 'gap': '0',
                 'flex': '1',
                 'minWidth': '350px',
+                'marginLeft': '10px',
                 'height': '100%',
                 'minHeight': '0'
             }
@@ -1939,112 +2810,4 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
     ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
 
 
-def create_eigenvalues_tab(eigenval, args):
-    """Create eigenvalues tab layout."""
-    # Create eigenvalue scree plot
-    import plotly.graph_objects as go
-    
-    fig = go.Figure()
-    
-    # Calculate variance explained
-    total = eigenval.sum()
-    variance_explained = (eigenval / total * 100).values
-    pc_names = [f'PC{i+1}' for i in range(len(eigenval))]
-    
-    # Determine how many PCs to show
-    n_show = min(args.eigenval_top_n if hasattr(args, 'eigenval_top_n') and args.eigenval_top_n else 20, len(eigenval))
-    
-    fig.add_trace(go.Bar(
-        x=pc_names[:n_show],
-        y=variance_explained[:n_show],
-        marker=dict(color='steelblue')
-    ))
-    
-    fig.update_layout(
-        title='Variance Explained by Principal Components',
-        xaxis_title='Principal Component',
-        yaxis_title='Variance Explained (%)',
-        height=600,
-        hovermode='x',
-        template='plotly_white'
-    )
-    
-    return html.Div([
-        html.H3("Eigenvalues"),
-        dcc.Graph(figure=fig),
-        html.P(f"Total variance: {total:.2f}"),
-        html.P(f"Showing top {n_show} of {len(eigenval)} components")
-    ])
 
-
-def create_statistics_tab(df_imiss, df_lmiss, df_frq):
-    """Create statistics tab layout."""
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    
-    plots = []
-    
-    # Individual missing rate histogram
-    if df_imiss is not None:
-        fig_imiss = go.Figure()
-        fig_imiss.add_trace(go.Histogram(
-            x=df_imiss['F_MISS'],
-            nbinsx=50,
-            marker=dict(color='steelblue')
-        ))
-        fig_imiss.update_layout(
-            title='Individual Missing Rate Distribution',
-            xaxis_title='Missing Rate',
-            yaxis_title='Count',
-            height=400,
-            template='plotly_white'
-        )
-        plots.append(html.Div([
-            html.H4(f"Individual Missing Rate ({len(df_imiss)} samples)"),
-            dcc.Graph(figure=fig_imiss)
-        ]))
-    
-    # SNP missing rate histogram
-    if df_lmiss is not None:
-        fig_lmiss = go.Figure()
-        fig_lmiss.add_trace(go.Histogram(
-            x=df_lmiss['F_MISS'],
-            nbinsx=50,
-            marker=dict(color='coral')
-        ))
-        fig_lmiss.update_layout(
-            title='SNP Missing Rate Distribution',
-            xaxis_title='Missing Rate',
-            yaxis_title='Count',
-            height=400,
-            template='plotly_white'
-        )
-        plots.append(html.Div([
-            html.H4(f"SNP Missing Rate ({len(df_lmiss)} SNPs)"),
-            dcc.Graph(figure=fig_lmiss)
-        ]))
-    
-    # Allele frequency histogram
-    if df_frq is not None:
-        fig_frq = go.Figure()
-        fig_frq.add_trace(go.Histogram(
-            x=df_frq['MAF'],
-            nbinsx=50,
-            marker=dict(color='seagreen')
-        ))
-        fig_frq.update_layout(
-            title='Minor Allele Frequency Distribution',
-            xaxis_title='MAF',
-            yaxis_title='Count',
-            height=400,
-            template='plotly_white'
-        )
-        plots.append(html.Div([
-            html.H4(f"Allele Frequencies ({len(df_frq)} SNPs)"),
-            dcc.Graph(figure=fig_frq)
-        ]))
-    
-    return html.Div([
-        html.H3("Statistics"),
-        *plots
-    ])

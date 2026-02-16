@@ -81,11 +81,19 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_group, legend=True, x
     
     Returns:
         Plotly Figure object
+    
+    Note:
+        For datasets > 3000 points, scattergl (WebGL) is used for better performance.
     """
     traces = []
+    
+    # Use WebGL for large datasets for better performance
+    use_gl = len(df) > 3000
+    scatter_type = 'scattergl' if use_gl else 'scatter'
 
     if group == 'none':
-        traces.append(go.Scatter(
+        scatter_trace = go.Scatter if not use_gl else go.Scattergl
+        traces.append(scatter_trace(
             x=df[x_col],
             y=df[y_col],
             mode='markers',
@@ -99,7 +107,8 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_group, legend=True, x
         ))
     elif df[group].dtype.kind in 'fi':
         # Continuous variable
-        traces.append(go.Scatter(
+        scatter_trace = go.Scatter if not use_gl else go.Scattergl
+        traces.append(scatter_trace(
             x=df[x_col],
             y=df[y_col],
             mode='markers',
@@ -113,8 +122,9 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_group, legend=True, x
         ))
     else:
         # Categorical
+        scatter_trace = go.Scatter if not use_gl else go.Scattergl
         for g, group_df in df.groupby(group, sort=False):
-            traces.append(go.Scatter(
+            traces.append(scatter_trace(
                 x=group_df[x_col],
                 y=group_df[y_col],
                 mode='markers',
@@ -309,6 +319,38 @@ def create_initial_pca_plot(df, x_col='PC1', y_col='PC2', group='none', aestheti
         title="",
         margin={'l': 20, 'r': 20, 't': 40, 'b': 20},
         dragmode='lasso',
+        legend_title=group,
+        height=700
+    )
+    
+    return fig
+
+
+def create_initial_3d_pca_plot(df, x_col='PC1', y_col='PC2', z_col='PC3', group='none', aesthetics_group=None):
+    """
+    Create initial 3D PCA plot (non-cached version for app initialization).
+    
+    Args:
+        df: DataFrame with PCA data
+        x_col: X-axis PC
+        y_col: Y-axis PC
+        z_col: Z-axis PC
+        group: Grouping variable
+        aesthetics_group: Dictionary with aesthetic settings
+    
+    Returns:
+        Plotly Figure object
+    """
+    fig = generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_group, 
+                                legend=True, df=df)
+    
+    fig.update_layout(
+        template='plotly_white',
+        clickmode='event+select',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        title="",
+        margin={'l': 20, 'r': 20, 't': 40, 'b': 20},
         legend_title=group,
         height=700
     )
@@ -546,7 +588,8 @@ def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=Non
             text=df_map['id'],
             customdata=df_map['id'],
             hovertemplate='<b>ID:</b> %{customdata}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
-            name='Samples'
+            name='Samples',
+            showlegend=False
         )
         traces.append(trace)
     elif df_map[group].dtype.kind in 'fi':
@@ -567,7 +610,8 @@ def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=Non
             text=df_map[group],
             customdata=df_map['id'],
             hovertemplate='<b>ID:</b> %{customdata}<br><b>' + group + ':</b> %{text:.2f}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
-            name=group
+            name=group,
+            showlegend=False
         )
         traces.append(trace)
     else:
@@ -596,7 +640,8 @@ def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=Non
                 text=[str(group_val)] * len(df_group),
                 customdata=df_group['id'],
                 hovertemplate='<b>ID:</b> %{customdata}<br><b>' + group + ':</b> %{text}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
-                name=str(group_val)
+                name=str(group_val),
+                showlegend=False
             )
             traces.append(trace)
     
@@ -613,7 +658,7 @@ def create_geographical_map(df, group='none', aesthetics_group=None, lat_col=Non
             showcountries=True,
             countrywidth=0.5
         ),
-        title=f'Geographic Distribution (grouped by {group})',
+        #title=f'Geographic Distribution (grouped by {group})',
         height=700,
         hovermode='closest',
         template='plotly_white'

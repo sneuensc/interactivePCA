@@ -76,10 +76,6 @@ Argument parsing functionality:
 
 ### 3. **interactive_pca/data_loader.py**
 Data loading and preprocessing:
-- `load_imiss()` - Load PLINK imiss files
-- `load_lmiss()` - Load PLINK lmiss files
-- `load_frq()` - Load PLINK frq files
-- `load_eigenval()` - Load eigenvalue files
 - `load_eigenvec()` - Load eigenvector files (with PCA detection)
 - `load_annotation()` - Load and process annotation files
 - `merge_data()` - Merge eigenvector and annotation data

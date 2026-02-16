@@ -45,20 +45,6 @@ def create_parser(script_name='Script'):
     parser.add_argument('--selectedID', type=str, default=None, required=False, 
                        help='Selected samples, given as comma separated IDs, or as a file with each ID on a line (default: all)')
 
-    # Eigenvalues
-    parser.add_argument('--eigenval', type=str, default=None, required=False, 
-                       help='Eigenval file path (plink)')
-    parser.add_argument('--nb_eigenvalues', type=int, default=10, 
-                       help='Number of eigenvalues to show (0 for all)')
-
-    # Statistics
-    parser.add_argument('--imiss', type=str, default=None, 
-                       help='Imiss file path (plink)')
-    parser.add_argument('--lmiss', type=str, default=None, 
-                       help='Lmiss file path (plink)')
-    parser.add_argument('--frq', type=str, default=None, 
-                       help='Frq file path (plink)')
-
     # Annotation
     parser.add_argument('--annotation', type=str, default=None, 
                        help='Annotation file path')
