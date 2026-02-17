@@ -15,8 +15,8 @@ import plotly.express as px
 from .data_loader import (
     load_eigenvec, load_annotation, merge_data
 )
-from .utils import strip_ansi
-from .plots import create_initial_pca_plot, create_initial_3d_pca_plot, create_geographical_map
+from .utils import strip_ansi, dict_of_dicts_to_tuple
+from .plots import set_dataframe, generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map
 
 
 
@@ -184,6 +184,9 @@ def create_app(args):
         invert_time=args.time_invert
     )
     
+    # Set global DataFrame in plots module
+    set_dataframe(df)
+    
     # Get annotation columns
     ANNOTATION_TIME = annotation_cols.get('time')
     ANNOTATION_LAT = annotation_cols.get('latitude')
@@ -319,19 +322,17 @@ def create_app(args):
         State('selection-store', 'data'),
         prevent_initial_call=True
     )
-    def save_selection(n_clicks, selected_indexes):
+    def save_selection(n_clicks, selected_ids):
         """Save selected IDs to a file."""
-        if not selected_indexes:
+        if not selected_ids:
             logging.warning("No selection to save")
             return
         
         try:
-            # Convert indexes to IDs
-            if not isinstance(selected_indexes, list) or not selected_indexes:
+            # selection-store now contains IDs directly
+            if not isinstance(selected_ids, list) or not selected_ids:
                 logging.warning("Invalid selection data")
                 return
-            
-            selected_ids = df.iloc[selected_indexes]['id'].tolist()
             
             # Check for uniqueness
             if len(selected_ids) != len(set(selected_ids)):
@@ -348,15 +349,48 @@ def create_app(args):
         except Exception as e:
             logging.error(f"Error saving selection: {str(e)}")
     
-    # Callback: Select all samples
+    # Callback: Select all samples and clear plot selections
     @app.callback(
         Output('selection-store', 'data', allow_duplicate=True),
+        Output('pca-plot', 'figure', allow_duplicate=True),
+        Output('pca-map-plot', 'figure', allow_duplicate=True),
         Input('select-all-button', 'n_clicks'),
+        State('pca-plot', 'figure'),
+        State('pca-map-plot', 'figure'),
         prevent_initial_call=True
     )
-    def select_all_samples(n_clicks):
-        """Select all samples in the dataset."""
-        return list(range(len(df)))
+    def select_all_samples(n_clicks, pca_fig, map_fig):
+        """Select all samples in the dataset and clear plot selections."""
+        import numpy as np
+        
+        all_ids = df['id'].tolist()
+        selected_set = set(str(sid) for sid in all_ids)
+        
+        # Clear lasso and update selectedpoints for PCA plot
+        if pca_fig:
+            pca_fig_dict = pca_fig if isinstance(pca_fig, dict) else pca_fig.to_dict()
+            for trace in pca_fig_dict.get('data', []):
+                customdata = trace.get('customdata', [])
+                if len(customdata) > 0 and selected_set:
+                    customdata_str = np.array([str(cd) for cd in customdata])
+                    mask = np.isin(customdata_str, list(selected_set))
+                    trace['selectedpoints'] = np.where(mask)[0].tolist()
+        else:
+            pca_fig_dict = {}
+        
+        # Clear lasso and update selectedpoints for map plot
+        if map_fig:
+            map_fig_dict = map_fig if isinstance(map_fig, dict) else map_fig.to_dict()
+            for trace in map_fig_dict.get('data', []):
+                customdata = trace.get('customdata', [])
+                if len(customdata) > 0 and selected_set:
+                    customdata_str = np.array([str(cd) for cd in customdata])
+                    mask = np.isin(customdata_str, list(selected_set))
+                    trace['selectedpoints'] = np.where(mask)[0].tolist()
+        else:
+            map_fig_dict = {}
+        
+        return all_ids, pca_fig_dict, map_fig_dict
     
     # Callback: Filter PCA annotation table and sync selection based on pandas query
     @app.callback(
@@ -371,13 +405,13 @@ def create_app(args):
         
         # If no query, select all
         if not query_string or query_string.strip() == '':
-            return list(range(len(df))), ""
+            return df['id'].tolist(), ""
         
         # Try to apply the query
         try:
             filtered_df = df.query(query_string)
-            selected_indexes = filtered_df.index.tolist()
-            return selected_indexes, ""
+            selected_ids = filtered_df['id'].tolist()
+            return selected_ids, ""
         except Exception as e:
             # Keep current selection and show error
             return dash.no_update, f"Query error: {str(e)}"
@@ -441,27 +475,18 @@ def create_app(args):
         prevent_initial_call=True
     )
     def table_to_selection_store(selected_rows):
-        """Convert selected rows in table to row indexes."""
+        """Convert selected rows in table to IDs."""
         if not selected_rows:
             return []
         
-        # AG Grid returns selected row data; optimize for large datasets
-        selected_indexes = []
+        # AG Grid returns selected row data
+        selected_ids = []
         if selected_rows:
-            # Try to match by ID if available
-            if 'id' in df.columns and all('id' in row for row in selected_rows):
-                selected_ids = [row['id'] for row in selected_rows]
-                # Use set-based lookup for better performance with large selections
-                if len(selected_ids) > 50:
-                    selected_id_set = set(selected_ids)
-                    selected_indexes = [i for i, row_id in enumerate(df['id']) if row_id in selected_id_set]
-                else:
-                    selected_indexes = df.index[df['id'].isin(selected_ids)].tolist()
-            else:
-                # Fallback: match by position
-                selected_indexes = list(range(len(selected_rows)))
+            # Extract IDs from selected rows and convert to strings
+            if 'id' in selected_rows[0]:
+                selected_ids = [str(row['id']) for row in selected_rows if 'id' in row]
         
-        return selected_indexes
+        return selected_ids
     
     # Callback: Update table to highlight selected rows
     @app.callback(
@@ -470,14 +495,15 @@ def create_app(args):
         State('pca-annotation-table', 'rowData'),
         prevent_initial_call=True
     )
-    def update_table_selection(selected_indexes, row_data):
+    def update_table_selection(selected_ids, row_data):
         """Update table to highlight selected rows."""
-        if not selected_indexes or not row_data:
+        if not selected_ids or not row_data:
             return []
         
-        # Return the row data objects for selected indexes
-        selected_set = set(selected_indexes)
-        selected_rows = [row_data[i] for i in selected_set if i < len(row_data)]
+        # Return the row data objects for selected IDs
+        # Convert all IDs to strings for consistent comparison
+        selected_set = set(str(sid) for sid in selected_ids)
+        selected_rows = [row for row in row_data if str(row.get('id', '')) in selected_set]
         return selected_rows
     
     # Callback to show/hide Z-axis dropdown based on 3D toggle
@@ -506,43 +532,67 @@ def create_app(args):
         State('selection-store', 'data'),
         prevent_initial_call=False
     )
-    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, hover_detailed, selected_cols, selected_indexes):
+    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, hover_detailed, selected_cols, selected_ids):
         """Regenerate PCA figure only when structure changes (axes, grouping, 3D mode)."""
         import json
         
         # Get current aesthetics
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
+        aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
         
-        # Create 3D or 2D plot based on toggle
-        if 'enable_3d' in is_3d:
-            fig = create_initial_3d_pca_plot(
-                df=df,
-                x_col=pc_x,
-                y_col=pc_y,
-                z_col=pc_z,
-                group=group,
-                aesthetics_group=aesthetics
-            )
-        else:
-            fig = create_initial_pca_plot(
-                df=df,
-                x_col=pc_x,
-                y_col=pc_y,
-                group=group,
-                aesthetics_group=aesthetics
-            )
-        
+        # Determine if legend should be shown (only if categorical group with more than 1 unique value)
         is_categorical = (
             group != 'none'
             and group in df.columns
             and df[group].dtype.kind not in 'fi'
         )
         
-        # Determine if legend should be shown (only if categorical and more than 1 unique value)
         show_legend = False
         if is_categorical:
             n_unique = df[group].nunique()
             show_legend = n_unique > 1
+        
+        # Create 3D or 2D plot based on toggle
+        if 'enable_3d' in is_3d:
+            # Convert selected_ids to tuple for caching
+            selected_tuple = tuple(selected_ids) if selected_ids else None
+            fig = generate_fig_scatter3d(
+                x_col=pc_x,
+                y_col=pc_y,
+                z_col=pc_z,
+                group=group,
+                aesthetics_tuple=aesthetics_tuple,
+                legend=show_legend,
+                selected_ids_tuple=selected_tuple
+            )
+            fig.update_layout(
+                template='plotly_white',
+                clickmode='event+select',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                title="",
+                margin={'l': 20, 'r': 20, 't': 40, 'b': 20},
+                legend_title=group,
+                height=700
+            )
+        else:
+            fig = generate_fig_scatter2d(
+                x_col=pc_x,
+                y_col=pc_y,
+                group=group,
+                aesthetics_tuple=aesthetics_tuple,
+                legend=show_legend
+            )
+            fig.update_layout(
+                template='plotly_white',
+                clickmode='event+select',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                title="",
+                margin={'l': 20, 'r': 20, 't': 40, 'b': 20},
+                dragmode='lasso',
+                legend_title=group
+            )
         
         # Update layout
         if 'enable_3d' not in is_3d:
@@ -591,14 +641,17 @@ def create_app(args):
         fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
         
         # Preserve selection when regenerating figure
-        if selected_indexes:
+        if selected_ids:
             import numpy as np
-            selected_set = set(selected_indexes)
+            # Convert all IDs to strings for consistent comparison
+            selected_set = set(str(sid) for sid in selected_ids)
             for trace in fig_dict.get('data', []):
-                n_points = len(trace.get('x', []))
-                if n_points > 0:
-                    indexes = np.arange(n_points)
-                    trace['selectedpoints'] = indexes[np.isin(indexes, list(selected_set))].tolist()
+                customdata = trace.get('customdata', [])
+                if len(customdata) > 0 and selected_set:
+                    # Convert customdata to strings and use NumPy for faster lookup
+                    customdata_str = np.array([str(cd) for cd in customdata])
+                    mask = np.isin(customdata_str, list(selected_set))
+                    trace['selectedpoints'] = np.where(mask)[0].tolist()
         
         return fig_dict, json.dumps(trace_map)
     
@@ -757,14 +810,14 @@ def create_app(args):
         prevent_initial_call=True
     )
     def pca_plot_to_selection_store(selected_data):
-        """Convert clicked/lasso points on PCA plot to row indexes."""
+        """Convert clicked/lasso points on PCA plot to IDs."""
         if not selected_data or 'points' not in selected_data or not selected_data['points']:
             return []
         
-        # Extract row indexes from pointIndex
-        selected_indexes = [pt.get('pointIndex') for pt in selected_data['points']]
-        selected_indexes = [idx for idx in selected_indexes if idx is not None]
-        return sorted(list(set(selected_indexes)))
+        # Extract IDs from customdata and convert to strings
+        selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
+        selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
+        return sorted(list(set(selected_ids)))
     
     # Callback for map plot updates (grouping only)
     @app.callback(
@@ -778,10 +831,11 @@ def create_app(args):
         if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
             return {}
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
+        aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
         fig = create_geographical_map(
-            df=df,
             group=group,
-            aesthetics_group=aesthetics,
+            aesthetics_tuple=aesthetics_tuple,
+            legend=False,
             lat_col=ANNOTATION_LAT,
             lon_col=ANNOTATION_LONG
         )
@@ -792,7 +846,7 @@ def create_app(args):
         )
         fig.update_layout(
             autosize=True,
-            margin=dict(l=50, r=140 if is_categorical else 20, t=40, b=40),
+            margin=dict(l=0, r=0, t=0, b=0),
             legend=dict(
                 x=1.02 if is_categorical else 0.02,
                 y=1 if is_categorical else 0.98,
@@ -821,14 +875,14 @@ def create_app(args):
         prevent_initial_call=True
     )
     def map_plot_to_selection_store(selected_data):
-        """Convert clicked/lasso points on map to row indexes."""
+        """Convert clicked/lasso points on map to IDs."""
         if not selected_data or 'points' not in selected_data or not selected_data['points']:
             return []
         
-        # Extract row indexes from pointIndex
-        selected_indexes = [pt.get('pointIndex') for pt in selected_data['points']]
-        selected_indexes = [idx for idx in selected_indexes if idx is not None]
-        return sorted(list(set(selected_indexes)))
+        # Extract IDs from customdata and convert to strings
+        selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
+        selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
+        return sorted(list(set(selected_ids)))
     
     # Callback: Update PCA plot to highlight selected points
     @app.callback(
@@ -841,25 +895,26 @@ def create_app(args):
         State('pca-plot', 'figure'),
         prevent_initial_call=True
     )
-    def update_pca_selection(selected_indexes, pc_x, pc_y, group, aesthetics_store, current_fig):
+    def update_pca_selection(selected_ids, pc_x, pc_y, group, aesthetics_store, current_fig):
         """Update PCA plot to highlight selected rows."""
         import numpy as np
         
         if current_fig is None:
             return {}
         
-        # Mark selected points in all traces
-        selected_set = set(selected_indexes) if selected_indexes else set()
+        # Mark selected points in all traces using customdata (IDs)
+        # Convert all IDs to strings for consistent comparison
+        selected_set = set(str(sid) for sid in selected_ids) if selected_ids else set()
         
         for trace in current_fig.get('data', []):
-            n_points = len(trace.get('x', []))
-            if n_points > 0:
-                # Use NumPy for better performance with large datasets
-                if selected_set:
-                    indexes = np.arange(n_points)
-                    trace['selectedpoints'] = indexes[np.isin(indexes, list(selected_set))].tolist()
-                else:
-                    trace['selectedpoints'] = []
+            customdata = trace.get('customdata', [])
+            if len(customdata) > 0 and selected_set:
+                # Convert customdata to strings and use NumPy for faster lookup
+                customdata_str = np.array([str(cd) for cd in customdata])
+                mask = np.isin(customdata_str, list(selected_set))
+                trace['selectedpoints'] = np.where(mask)[0].tolist()
+            else:
+                trace['selectedpoints'] = []
         
         return current_fig
     
@@ -872,25 +927,26 @@ def create_app(args):
         State('pca-map-plot', 'figure'),
         prevent_initial_call=True
     )
-    def update_map_selection(selected_indexes, group, aesthetics_store, current_fig):
+    def update_map_selection(selected_ids, group, aesthetics_store, current_fig):
         """Update map plot to highlight selected rows."""
         import numpy as np
         
         if current_fig is None:
             return {}
         
-        # Mark selected points in all traces
-        selected_set = set(selected_indexes) if selected_indexes else set()
+        # Mark selected points in all traces using customdata (IDs)
+        # Convert all IDs to strings for consistent comparison
+        selected_set = set(str(sid) for sid in selected_ids) if selected_ids else set()
         
         for trace in current_fig.get('data', []):
-            n_points = len(trace.get('lon', []))
-            if n_points > 0:
-                # Use NumPy for better performance with large datasets
-                if selected_set:
-                    indexes = np.arange(n_points)
-                    trace['selectedpoints'] = indexes[np.isin(indexes, list(selected_set))].tolist()
-                else:
-                    trace['selectedpoints'] = []
+            customdata = trace.get('customdata', [])
+            if len(customdata) > 0 and selected_set:
+                # Convert customdata to strings and use NumPy for faster lookup
+                customdata_str = np.array([str(cd) for cd in customdata])
+                mask = np.isin(customdata_str, list(selected_set))
+                trace['selectedpoints'] = np.where(mask)[0].tolist()
+            else:
+                trace['selectedpoints'] = []
         
         return current_fig
     
@@ -901,14 +957,14 @@ def create_app(args):
         prevent_initial_call=True
     )
     def time_plot_to_selection_store(selected_data):
-        """Convert selected points in time scatter to row indexes."""
+        """Convert selected points in time scatter to IDs."""
         if not selected_data or 'points' not in selected_data or not selected_data['points']:
             return []
         
-        # Extract row indexes from customdata
-        selected_indexes = [pt.get('customdata') for pt in selected_data['points']]
-        selected_indexes = [idx for idx in selected_indexes if idx is not None]
-        return sorted(list(set(selected_indexes)))
+        # Extract IDs from customdata and convert to strings
+        selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
+        selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
+        return sorted(list(set(selected_ids)))
     
     # Callback: Update time histogram to highlight selected points
     @app.callback(
@@ -917,23 +973,23 @@ def create_app(args):
         State('time-histogram', 'figure'),
         prevent_initial_call=True
     )
-    def update_time_selection(selected_indexes, current_fig):
+    def update_time_selection(selected_ids, current_fig):
         """Update time histogram to highlight selected rows."""
         import numpy as np
         
         if current_fig is None:
             return {}
         
-        # Mark selected points in all traces using customdata
-        selected_set = set(selected_indexes) if selected_indexes else set()
+        # Mark selected points in all traces using customdata (IDs)
+        # Convert all IDs to strings for consistent comparison
+        selected_set = set(str(sid) for sid in selected_ids) if selected_ids else set()
         
         for trace in current_fig.get('data', []):
             customdata = trace.get('customdata', [])
-            if customdata and selected_set:
-                # Use NumPy for faster lookup performance
-                customdata_array = np.array(customdata)
-                selected_set_array = np.array(list(selected_set))
-                mask = np.isin(customdata_array, selected_set_array)
+            if len(customdata) > 0 and selected_set:
+                # Convert customdata to strings and use NumPy for faster lookup
+                customdata_str = np.array([str(cd) for cd in customdata])
+                mask = np.isin(customdata_str, list(selected_set))
                 trace['selectedpoints'] = np.where(mask)[0].tolist()
             else:
                 trace['selectedpoints'] = []
@@ -949,7 +1005,8 @@ def create_app(args):
         Input('pca-plot', 'selectedData'),
         Input('marker-aesthetics-store', 'data'),
         State('hover-detailed', 'data'),
-        State('selected-annotation-columns', 'data')
+        State('selected-annotation-columns', 'data'),
+        prevent_initial_call=False
     )
     def update_time_histogram(group, viz_mode, time_variable, selected_data, aesthetics_store, hover_detailed, selected_cols):
         import plotly.graph_objects as go
@@ -1869,7 +1926,8 @@ def get_init_aesthetics(args, group, df):
             unique_values = df[group].dropna().unique()
             px_colors = px.colors.qualitative.Plotly
             for i, val in enumerate(unique_values):
-                aesthetics['color'][val] = px_colors[i % len(px_colors)]
+                # Convert to string to ensure consistent key type
+                aesthetics['color'][str(val)] = px_colors[i % len(px_colors)]
     
     return aesthetics
 
@@ -1936,7 +1994,8 @@ def create_layout(args, df, pcs,
         'value': 'pca_tab',
         'content': create_pca_tab(
             pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
-            df, init_aesthetics, ANNOTATION_LONG, annotation_columns, continuous_columns, annotation_desc
+            df, init_aesthetics, ANNOTATION_LONG, annotation_columns, continuous_columns, annotation_desc,
+            init_selected_ids
         )
     })
     
@@ -2057,8 +2116,8 @@ def create_layout(args, df, pcs,
             base_aesthetics = get_init_aesthetics(args, group_name, df)
             init_store_data[group_name] = merge_aesthetics(base_aesthetics, all_file_aesthetics[group_name])
     
-    # Initialize selection with all row indexes (corresponding to init_selected_ids)
-    init_selected_indexes = df.index[df['id'].isin(init_selected_ids)].tolist()
+    # Initialize selection with all IDs from init_selected_ids
+    # (no need for init_selected_indexes anymore since we use IDs)
     
     # Calculate initial selected annotation columns (first 10 rows, same as annotation table default)
     init_selected_cols = []
@@ -2089,7 +2148,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='trace-pca', data={}),
         dcc.Store(id='trace-map', data={}),
         dcc.Store(id='trace-time', data={}),
-        dcc.Store(id='selection-store', data=init_selected_indexes),  # Selected row indexes for cross-plot sync
+        dcc.Store(id='selection-store', data=init_selected_ids),  # Selected IDs for cross-plot sync
         dcc.Store(id='hover-detailed', data=False),  # Toggle for detailed hover information
         dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
         
@@ -2169,34 +2228,96 @@ def create_layout(args, df, pcs,
 
 
 def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
-                   df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None):
+                   df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None, init_selected_ids=None):
     """Create PCA tab layout with map on the right and extra panels below."""
     # Determine if legend should be shown initially (only if group has multiple unique values)
     init_show_legend = []
+    init_legend = False
     if init_group != 'none' and init_group in df.columns:
         n_unique = df[init_group].nunique()
         if n_unique > 1:
             init_show_legend = ['show_legend']
+            init_legend = True
     
     # Generate initial PCA figure
-    init_fig = create_initial_pca_plot(
-        df=df,
+    aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
+    init_fig = generate_fig_scatter2d(
         x_col=pcs[0],
         y_col=pcs[1],
         group=init_group,
-        aesthetics_group=aesthetics
+        aesthetics_tuple=aesthetics_tuple,
+        legend=init_legend
+    )
+    init_fig.update_layout(
+        template='plotly_white',
+        clickmode='event+select',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        title="",
+        margin={'l': 20, 'r': 20, 't': 40, 'b': 20},
+        dragmode='lasso',
+        legend_title=init_group
     )
     
     # Generate initial map figure (if coordinates available)
     init_map_fig = None
     if ANNOTATION_LAT is not None and ANNOTATION_LONG is not None:
         init_map_fig = create_geographical_map(
-            df=df,
             group=init_group,
-            aesthetics_group=aesthetics,
+            aesthetics_tuple=aesthetics_tuple,
+            legend=False,
             lat_col=ANNOTATION_LAT,
             lon_col=ANNOTATION_LONG
         )
+        # Apply layout settings to prevent rescaling when callback fires
+        is_categorical = (
+            init_group != 'none'
+            and init_group in df.columns
+            and df[init_group].dtype.kind not in 'fi'
+        )
+        init_map_fig.update_layout(
+            autosize=True,
+            margin=dict(l=0, r=0, t=0, b=0),
+            legend=dict(
+                x=1.02 if is_categorical else 0.02,
+                y=1 if is_categorical else 0.98,
+                xanchor='left',
+                yanchor='top'
+            ),
+            dragmode='lasso',
+            hoverlabel=dict(
+                bgcolor='white',
+                font_color='#333',
+                namelength=-1
+            )
+        )
+    
+    # Apply initial selection to figures if provided
+    if init_selected_ids:
+        import numpy as np
+        # Convert all IDs to strings for consistent comparison
+        selected_set = set(str(sid) for sid in init_selected_ids)
+        
+        # Apply to PCA figure
+        init_fig_dict = init_fig.to_dict()
+        for trace in init_fig_dict.get('data', []):
+            customdata = trace.get('customdata', [])
+            if len(customdata) > 0 and selected_set:
+                customdata_str = np.array([str(cd) for cd in customdata])
+                mask = np.isin(customdata_str, list(selected_set))
+                trace['selectedpoints'] = np.where(mask)[0].tolist()
+        init_fig = init_fig_dict
+        
+        # Apply to map figure if available
+        if init_map_fig is not None:
+            init_map_dict = init_map_fig.to_dict() if hasattr(init_map_fig, 'to_dict') else init_map_fig
+            for trace in init_map_dict.get('data', []):
+                customdata = trace.get('customdata', [])
+                if len(customdata) > 0 and selected_set:
+                    customdata_str = np.array([str(cd) for cd in customdata])
+                    mask = np.isin(customdata_str, list(selected_set))
+                    trace['selectedpoints'] = np.where(mask)[0].tolist()
+            init_map_fig = init_map_dict
     
     # Control dropdowns
     control_section = html.Div([
@@ -2342,6 +2463,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     default_continuous = ANNOTATION_TIME if ANNOTATION_TIME in continuous_columns else (continuous_columns[0] if continuous_columns else None)
     if default_continuous is not None and default_continuous in df.columns:
         import plotly.graph_objects as go
+        import numpy as np
         time_vals = df[default_continuous].dropna()
         if time_vals.empty:
             time_hist = html.Div(
@@ -2349,13 +2471,37 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 style={'padding': '10px', 'color': '#666'}
             )
         else:
-            # Create empty figure - callback will populate with correct mode (scatter, not histogram)
+            # Create initial scatter figure with jitter (matching default 'scatter' mode)
             fig_time = go.Figure()
+            time_ids = df.loc[time_vals.index, 'id'].tolist()
+            np.random.seed(42)
+            jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
+            
+            # Get default aesthetics from the initial settings passed in
+            default_color = aesthetics['color'].get('default', 'steelblue')
+            default_size = aesthetics['size'].get('default', 8)
+            default_opacity = aesthetics['opacity'].get('default', 0.7)
+            
+            fig_time.add_trace(go.Scatter(
+                x=time_vals,
+                y=jitter,
+                mode='markers',
+                marker=dict(color=default_color, size=default_size, opacity=default_opacity),
+                customdata=time_ids,
+                hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
+                name='All samples',
+                showlegend=False
+            ))
+            
             fig_time.update_layout(
                 xaxis_title=default_continuous,
                 yaxis_title="",
+                yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
                 height=250,
                 template='plotly_white',
+                autosize=True,
+                dragmode='lasso',
+                margin=dict(l=50, r=20, t=40, b=40),
                 hoverlabel=dict(
                     bgcolor='white',
                     font_color='#333',
@@ -2507,6 +2653,12 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             style={'height': '100%'}
         )
 
+        # Build initial list of rows that match selected IDs
+        initial_selected_rows = []
+        if init_selected_ids:
+            selected_set = set(str(sid) for sid in init_selected_ids)
+            initial_selected_rows = [row for row in table_data if str(row.get('id', '')) in selected_set]
+        
         annotation_table = dag.AgGrid(
             id='pca-annotation-table',
             rowData=table_data,
@@ -2524,6 +2676,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 'paginationPageSize': 20,
                 'animateRows': False
             },
+            selectedRows=initial_selected_rows,
             style={'flex': '1', 'width': '100%'}
         )
 
@@ -2538,7 +2691,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         'overflow': 'hidden',
                         'position': 'relative',
                         'display': 'flex',
-                        'flexDirection': 'column'
+                        'flexDirection': 'column',
+                        'marginBottom': '10px'
                     },
                     **{'data-pane': 'top'}
                 ),
@@ -2563,7 +2717,6 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         annotation_table,
                         # Filter section
                         html.Div([
-                            html.H4("Filter Selection", style={'marginTop': '15px', 'marginBottom': '8px'}),
                             dcc.Textarea(
                                 id='pca-filter-query',
                                 placeholder='Enter pandas query (e.g., "Country == \'France\'" or "PC1 > 0")...',
@@ -2773,10 +2926,12 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
             'headerCheckboxSelectionFilteredOnly': True,
             'width': 40,
             'pinned': 'left'
-        }
-    ] + [
-        {'field': col, 'headerName': col, 'sortable': True, 'filter': True}
-        for col in annotation_desc_extended.columns
+        },
+        {'field': 'Abbreviation', 'headerName': 'Abbreviation', 'sortable': True, 'filter': True, 'minWidth': 100},
+        {'field': 'Description', 'headerName': 'Description', 'sortable': True, 'filter': True, 'flex': 1, 'minWidth': 200},
+        {'field': 'Type', 'headerName': 'Type', 'sortable': True, 'filter': True, 'minWidth': 80},
+        {'field': 'N_levels', 'headerName': 'N_levels', 'sortable': True, 'filter': True, 'minWidth': 80},
+        {'field': 'Dropdown', 'headerName': 'Dropdown', 'sortable': True, 'filter': True, 'minWidth': 80}
     ]
     
     # Select first 10 rows as default
@@ -2792,17 +2947,18 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
             rowData=table_data,
             columnDefs=column_defs,
             defaultColDef={
-                'flex': 1,
-                'minWidth': 150,
                 'resizable': True,
-                'sortable': True,
-                'filter': True
             },
             dashGridOptions={
                 'rowSelection': 'multiple',
                 'pagination': True,
                 'paginationPageSize': 20,
-                'animateRows': False
+                'animateRows': False,
+                'suppressColumnVirtualisation': True,
+                'autoSizeStrategy': {
+                    'type': 'fitCellContents',
+                    'skipHeader': False
+                }
             },
             selectedRows=table_data[:10] if len(table_data) >= 10 else table_data,
             style={'flex': '1', 'width': '100%'}
