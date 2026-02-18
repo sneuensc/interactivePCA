@@ -12,12 +12,9 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, State, ALL
 import plotly.express as px
 
-from .data_loader import (
-    load_eigenvec, load_annotation, merge_data
-)
+from .data_loader import load_eigenvec, load_annotation, merge_data
 from .utils import strip_ansi, dict_of_dicts_to_tuple
 from .plots import set_dataframe, generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map
-
 
 
 
@@ -305,15 +302,20 @@ def create_app(args):
     # Callback: Update selected annotation columns store
     @app.callback(
         Output('selected-annotation-columns', 'data'),
-        Input('annotation-table', 'selectedRows'),
+        Input('annotation-table', 'cellValueChanged'),
+        State('annotation-table', 'rowData'),
         prevent_initial_call=True
     )
-    def update_selected_annotation_columns(selected_rows):
+    def update_selected_annotation_columns(_cell_change, row_data):
         """Track which annotation columns are selected for detailed hover."""
-        if not selected_rows:
+        if not row_data:
             return []
-        # Extract the 'Abbreviation' field from selected rows
-        selected_cols = [row.get('Abbreviation') for row in selected_rows if row.get('Abbreviation')]
+        # Extract the 'Abbreviation' field from checked rows
+        selected_cols = [
+            row.get('Abbreviation')
+            for row in row_data
+            if row.get('Selected') and row.get('Abbreviation')
+        ]
         return selected_cols
     
     # Callback: Save selected IDs to file
@@ -436,75 +438,88 @@ def create_app(args):
     @app.callback(
         Output('pca-annotation-table', 'rowData'),
         Output('pca-annotation-table', 'columnDefs'),
-        Input('annotation-table', 'selectedRows'),
+        Input('selected-annotation-columns', 'data'),
+        State('selection-store', 'data'),
         prevent_initial_call=False
     )
-    def update_pca_annotation_table(selected_rows):
-        logging.info(f"PCA annotation table callback triggered with {len(selected_rows) if selected_rows else 0} selected rows")
-        if not selected_rows:
+    def update_pca_annotation_table(selected_columns, selected_ids):
+        logging.info(
+            f"PCA annotation table callback triggered with {len(selected_columns) if selected_columns else 0} selected columns"
+        )
+        if not selected_columns:
             logging.warning("No rows selected in annotation table")
             return [], []
-        # Extract 'Abbreviation' field from selected rows
-        selected_columns = [row.get('Abbreviation') for row in selected_rows if row.get('Abbreviation')]
-        logging.info(f"Selected columns: {selected_columns}")
         cols = [c for c in selected_columns if c in df.columns]
         if not cols:
             logging.warning(f"None of the selected columns found in df. Available columns: {df.columns.tolist()[:10]}")
             return [], []
         logging.info(f"Updating PCA annotation table with {len(cols)} columns: {cols}")
+        if 'id' not in cols:
+            cols = ['id'] + cols
         row_data = df[cols].to_dict('records')
+        selected_set = set(str(sid) for sid in (selected_ids or []))
+        for row in row_data:
+            row['Selected'] = str(row.get('id')) in selected_set
         column_defs = [
             {
                 'headerName': '',
-                'checkboxSelection': True,
-                'headerCheckboxSelection': True,
-                'headerCheckboxSelectionFilteredOnly': True,
-                'width': 40,
+                'field': 'Selected',
+                'editable': True,
+                'cellEditor': 'agCheckboxCellEditor',
+                'cellRenderer': 'agCheckboxCellRenderer',
+                'width': 60,
+                'suppressMenu': True,
                 'pinned': 'left'
+            },
+            {
+                'field': 'id',
+                'headerName': 'id',
+                'hide': True
             }
         ] + [
             {'field': col, 'headerName': col, 'sortable': True, 'filter': True}
             for col in cols
+            if col != 'id'
         ]
         return row_data, column_defs
     
     # Callback: Table selection -> selection store
     @app.callback(
         Output('selection-store', 'data', allow_duplicate=True),
-        Input('pca-annotation-table', 'selectedRows'),
+        Input('pca-annotation-table', 'cellValueChanged'),
+        State('selection-store', 'data'),
         prevent_initial_call=True
     )
-    def table_to_selection_store(selected_rows):
+    def table_to_selection_store(cell_change, selected_ids):
         """Convert selected rows in table to IDs."""
-        if not selected_rows:
-            return []
-        
-        # AG Grid returns selected row data
-        selected_ids = []
-        if selected_rows:
-            # Extract IDs from selected rows and convert to strings
-            if 'id' in selected_rows[0]:
-                selected_ids = [str(row['id']) for row in selected_rows if 'id' in row]
-        
-        return selected_ids
+        if not cell_change or 'data' not in cell_change:
+            return dash.no_update
+        row = cell_change.get('data') or {}
+        row_id = row.get('id')
+        if row_id is None:
+            return dash.no_update
+        selected_set = set(str(sid) for sid in (selected_ids or []))
+        if row.get('Selected'):
+            selected_set.add(str(row_id))
+        else:
+            selected_set.discard(str(row_id))
+        return sorted(selected_set)
     
     # Callback: Update table to highlight selected rows
     @app.callback(
-        Output('pca-annotation-table', 'selectedRows'),
+        Output('pca-annotation-table', 'rowData', allow_duplicate=True),
         Input('selection-store', 'data'),
         State('pca-annotation-table', 'rowData'),
         prevent_initial_call=True
     )
     def update_table_selection(selected_ids, row_data):
-        """Update table to highlight selected rows."""
-        if not selected_ids or not row_data:
-            return []
-        
-        # Return the row data objects for selected IDs
-        # Convert all IDs to strings for consistent comparison
+        """Update table checkbox state to reflect current selection."""
+        if not row_data:
+            return dash.no_update
         selected_set = set(str(sid) for sid in selected_ids)
-        selected_rows = [row for row in row_data if str(row.get('id', '')) in selected_set]
-        return selected_rows
+        for row in row_data:
+            row['Selected'] = str(row.get('id')) in selected_set
+        return row_data
     
     # Callback to show/hide Z-axis dropdown based on 3D toggle
     @app.callback(
@@ -527,12 +542,13 @@ def create_app(args):
         Input('dropdown-group', 'value'),
         Input('pca-3d-toggle', 'value'),
         State('marker-aesthetics-store', 'data'),
+        State('pca-legend-toggle', 'value'),
         State('hover-detailed', 'data'),
         State('selected-annotation-columns', 'data'),
         State('selection-store', 'data'),
         prevent_initial_call=False
     )
-    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, hover_detailed, selected_cols, selected_ids):
+    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, legend_toggle, hover_detailed, selected_cols, selected_ids):
         """Regenerate PCA figure only when structure changes (axes, grouping, 3D mode)."""
         import json
         
@@ -540,17 +556,26 @@ def create_app(args):
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
         aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
         
-        # Determine if legend should be shown (only if categorical group with more than 1 unique value)
+        # Determine if legend should be shown
         is_categorical = (
             group != 'none'
             and group in df.columns
             and df[group].dtype.kind not in 'fi'
+        )
+        is_continuous = (
+            group != 'none'
+            and group in df.columns
+            and df[group].dtype.kind in 'fi'
         )
         
         show_legend = False
         if is_categorical:
             n_unique = df[group].nunique()
             show_legend = n_unique > 1
+            if legend_toggle is not None:
+                show_legend = show_legend and ('show_legend' in legend_toggle)
+        elif is_continuous:
+            show_legend = True
         
         # Create 3D or 2D plot based on toggle
         if 'enable_3d' in is_3d:
@@ -671,15 +696,28 @@ def create_app(args):
         
         # Get margin from current layout or default
         try:
-            is_categorical = current_fig['layout'].get('legend', {}).get('title') not in (None, 'none', '')
-        except:
+            legend_title = current_fig.get('layout', {}).get('legend', {}).get('title')
+            if isinstance(legend_title, dict):
+                legend_title = legend_title.get('text')
+            is_categorical = legend_title not in (None, 'none', '')
+        except Exception:
             is_categorical = False
         
         # Adjust right margin based on legend visibility
         r_margin = 140 if is_categorical and show_legend_flag else 20
         
+        if 'layout' not in current_fig:
+            current_fig['layout'] = {}
+        if 'legend' not in current_fig['layout']:
+            current_fig['layout']['legend'] = {}
+        if 'margin' not in current_fig['layout']:
+            current_fig['layout']['margin'] = {}
         current_fig['layout']['legend']['visible'] = show_legend_flag
         current_fig['layout']['margin']['r'] = r_margin
+
+        if is_categorical:
+            for trace in current_fig.get('data', []):
+                trace['showlegend'] = show_legend_flag
         
         return current_fig
     
@@ -727,36 +765,6 @@ def create_app(args):
         """Update time histogram hover templates based on detailed flag."""
         group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
         return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time')
-    
-    # Callback for PCA plot hover update when group changes
-    @app.callback(
-        Output('pca-plot', 'figure', allow_duplicate=True),
-        Input('dropdown-group', 'value'),
-        State('pca-plot', 'figure'),
-        State('hover-detailed', 'data'),
-        State('selected-annotation-columns', 'data'),
-        State('marker-aesthetics-store', 'data'),
-        prevent_initial_call=True
-    )
-    def update_pca_hover_on_group_change(group, current_fig, hover_detailed, selected_cols, aesthetics_store):
-        """Update PCA plot hover when group selection changes."""
-        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
-        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
-    
-    # Callback for map plot hover update when group changes
-    @app.callback(
-        Output('pca-map-plot', 'figure', allow_duplicate=True),
-        Input('dropdown-group', 'value'),
-        State('pca-map-plot', 'figure'),
-        State('hover-detailed', 'data'),
-        State('selected-annotation-columns', 'data'),
-        State('marker-aesthetics-store', 'data'),
-        prevent_initial_call=True
-    )
-    def update_map_hover_on_group_change(group, current_fig, hover_detailed, selected_cols, aesthetics_store):
-        """Update map plot hover when group selection changes."""
-        group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
-        return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map')
     
     # Callback for PCA plot hover update when selected columns change
     @app.callback(
@@ -888,14 +896,10 @@ def create_app(args):
     @app.callback(
         Output('pca-plot', 'figure', allow_duplicate=True),
         Input('selection-store', 'data'),
-        Input('dropdown-pc-x', 'value'),
-        Input('dropdown-pc-y', 'value'),
-        Input('dropdown-group', 'value'),
-        Input('marker-aesthetics-store', 'data'),
         State('pca-plot', 'figure'),
         prevent_initial_call=True
     )
-    def update_pca_selection(selected_ids, pc_x, pc_y, group, aesthetics_store, current_fig):
+    def update_pca_selection(selected_ids, current_fig):
         """Update PCA plot to highlight selected rows."""
         import numpy as np
         
@@ -922,12 +926,10 @@ def create_app(args):
     @app.callback(
         Output('pca-map-plot', 'figure', allow_duplicate=True),
         Input('selection-store', 'data'),
-        Input('dropdown-group', 'value'),
-        Input('marker-aesthetics-store', 'data'),
         State('pca-map-plot', 'figure'),
         prevent_initial_call=True
     )
-    def update_map_selection(selected_ids, group, aesthetics_store, current_fig):
+    def update_map_selection(selected_ids, current_fig):
         """Update map plot to highlight selected rows."""
         import numpy as np
         
@@ -1072,8 +1074,7 @@ def create_app(args):
                             size=default_size,
                             opacity=default_opacity,
                             symbol=aesthetics['symbol'].get('default', 'circle'),
-                            showscale=True,
-                            colorbar=dict(title=group)
+                            showscale=False
                         ),
                         customdata=time_ids,
                         hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
@@ -2497,7 +2498,6 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 xaxis_title=default_continuous,
                 yaxis_title="",
                 yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-                height=250,
                 template='plotly_white',
                 autosize=True,
                 dragmode='lasso',
@@ -2632,19 +2632,32 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         # Select first 10 columns as default
         default_table_columns = initial_columns[:10] if len(initial_columns) >= 10 else initial_columns
         table_columns = [c for c in default_table_columns if c in df.columns]
+        if 'id' not in table_columns:
+            table_columns = ['id'] + table_columns
         table_data = df[table_columns].to_dict('records') if table_columns else []
+        selected_set = set(str(sid) for sid in (init_selected_ids or []))
+        for row in table_data:
+            row['Selected'] = str(row.get('id')) in selected_set
         column_defs = [
             {
                 'headerName': '',
-                'checkboxSelection': True,
-                'headerCheckboxSelection': True,
-                'headerCheckboxSelectionFilteredOnly': True,
-                'width': 40,
+                'field': 'Selected',
+                'editable': True,
+                'cellEditor': 'agCheckboxCellEditor',
+                'cellRenderer': 'agCheckboxCellRenderer',
+                'width': 60,
+                'suppressMenu': True,
                 'pinned': 'left'
+            },
+            {
+                'field': 'id',
+                'headerName': 'id',
+                'hide': True
             }
         ] + [
             {'field': col, 'headerName': col, 'sortable': True, 'filter': True}
             for col in table_columns
+            if col != 'id'
         ]
 
         map_plot = dcc.Graph(
@@ -2653,12 +2666,6 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             style={'height': '100%'}
         )
 
-        # Build initial list of rows that match selected IDs
-        initial_selected_rows = []
-        if init_selected_ids:
-            selected_set = set(str(sid) for sid in init_selected_ids)
-            initial_selected_rows = [row for row in table_data if str(row.get('id', '')) in selected_set]
-        
         annotation_table = dag.AgGrid(
             id='pca-annotation-table',
             rowData=table_data,
@@ -2671,13 +2678,12 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 'filter': True
             },
             dashGridOptions={
-                'rowSelection': 'multiple',
                 'pagination': True,
                 'paginationPageSize': 20,
-                'animateRows': False
+                'animateRows': False,
+                'suppressRowClickSelection': True
             },
-            selectedRows=initial_selected_rows,
-            style={'flex': '1', 'width': '100%'}
+            style={'flex': '1 1 auto', 'width': '100%', 'height': '100%', 'minHeight': 0}
         )
 
         map_section = html.Div(
@@ -2687,7 +2693,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     id='pca-map-pane',
                     children=map_plot,
                     style={
-                        'flex': '0 0 60%',
+                        'flex': '0 0 50%',
                         'overflow': 'hidden',
                         'position': 'relative',
                         'display': 'flex',
@@ -2714,7 +2720,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 html.Div(
                     id='pca-table-pane',
                     children=[
-                        annotation_table,
+                        html.Div(
+                            children=annotation_table,
+                            style={'flex': '1 1 auto', 'minHeight': 0, 'overflow': 'hidden'}
+                        ),
                         # Filter section
                         html.Div([
                             dcc.Textarea(
@@ -2723,25 +2732,35 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                                 style={
                                     'width': '100%',
                                     'height': '60px',
+                                    'minHeight': '60px',
+                                    'maxHeight': '60px',
                                     'fontSize': '12px',
                                     'fontFamily': 'monospace',
                                     'padding': '6px',
                                     'border': '1px solid #ccc',
                                     'borderRadius': '4px',
-                                    'resize': 'vertical'
+                                    'resize': 'none'
                                 }
                             ),
                             html.Div(
                                 id='pca-filter-error-message',
                                 style={'color': 'red', 'fontSize': '11px', 'marginTop': '4px', 'minHeight': '16px'}
                             )
-                        ], style={'marginTop': '15px', 'padding': '10px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'})
+                        ], style={
+                            'flex': '0 0 90px',
+                            'minHeight': '90px',
+                            'marginTop': '10px',
+                            'padding': '10px',
+                            'backgroundColor': '#f8f9fa',
+                            'borderRadius': '5px'
+                        })
                     ],
                     style={
-                        'flex': '0 0 40%',
-                        'overflow': 'auto',
+                        'flex': '0 0 50%',
+                        'overflow': 'hidden',
                         'display': 'flex',
-                        'flexDirection': 'column'
+                        'flexDirection': 'column',
+                        'minHeight': 0
                     },
                     **{'data-pane': 'bottom'}
                 )
@@ -2916,15 +2935,22 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
     
     # Convert annotation_desc DataFrame to dict format for AG Grid
     table_data = annotation_desc_extended.to_dict('records')
+    if 'Selected' not in annotation_desc_extended.columns:
+        for row in table_data:
+            row['Selected'] = False
+    for row in table_data[:10]:
+        row['Selected'] = True
     
-    # Define columns for the table (dedicated checkbox selection as first column)
+    # Define columns for the table (checkbox column instead of row selection)
     column_defs = [
         {
             'headerName': '',
-            'checkboxSelection': True,
-            'headerCheckboxSelection': True,
-            'headerCheckboxSelectionFilteredOnly': True,
-            'width': 40,
+            'field': 'Selected',
+            'editable': True,
+            'cellEditor': 'agCheckboxCellEditor',
+            'cellRenderer': 'agCheckboxCellRenderer',
+            'width': 60,
+            'suppressMenu': True,
             'pinned': 'left'
         },
         {'field': 'Abbreviation', 'headerName': 'Abbreviation', 'sortable': True, 'filter': True, 'minWidth': 100},
@@ -2933,9 +2959,6 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
         {'field': 'N_levels', 'headerName': 'N_levels', 'sortable': True, 'filter': True, 'minWidth': 80},
         {'field': 'Dropdown', 'headerName': 'Dropdown', 'sortable': True, 'filter': True, 'minWidth': 80}
     ]
-    
-    # Select first 10 rows as default
-    row_indices_to_select = list(range(min(10, len(table_data))))
     
     return html.Div([
         html.H3("Annotation Description", style={'marginBottom': '20px'}),
@@ -2950,17 +2973,16 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
                 'resizable': True,
             },
             dashGridOptions={
-                'rowSelection': 'multiple',
                 'pagination': True,
                 'paginationPageSize': 20,
                 'animateRows': False,
+                'suppressRowClickSelection': True,
                 'suppressColumnVirtualisation': True,
                 'autoSizeStrategy': {
                     'type': 'fitCellContents',
                     'skipHeader': False
                 }
             },
-            selectedRows=table_data[:10] if len(table_data) >= 10 else table_data,
             style={'flex': '1', 'width': '100%'}
         )
     ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
