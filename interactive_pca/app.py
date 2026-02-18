@@ -245,7 +245,7 @@ def create_app(args):
     )
     
     # Register hover update callbacks (factory pattern)
-    register_hover_update_callbacks(app, df, annotation_desc)
+    register_hover_update_callbacks(app, args, df, annotation_desc)
     
     # Register all application callbacks
     register_all_callbacks(

@@ -115,7 +115,14 @@ def load_eigenvec(filepath, id_column=None):
     
     # Determine ID column
     eigenvec_id = id_column if id_column is not None else eigenvec.columns[0]
-    eigenvec.rename(columns={eigenvec_id: "id"}, inplace=True)
+    if eigenvec_id != "id":
+        eigenvec.rename(columns={eigenvec_id: "id"}, inplace=True)
+    else:
+        logging.info("Using existing 'id' column from eigenvec file.")
+    if eigenvec["id"].duplicated().any():
+        dup_ids = eigenvec.loc[eigenvec["id"].duplicated(), "id"].astype(str).unique()[:10]
+        logging.error("Eigenvec IDs are not unique. Examples: %s", ", ".join(dup_ids))
+        raise ValueError("Eigenvec IDs are not unique. Please provide a file with unique IDs.")
     
     # Find PC columns
     pcs = find_incrementing_prefix_series(eigenvec.columns)

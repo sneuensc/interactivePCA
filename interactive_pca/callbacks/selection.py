@@ -36,7 +36,7 @@ def register_selection_callbacks(app, df, annotation_desc):
     )
     def update_hover_detailed(hover_toggle):
         """Toggle detailed hover information."""
-        return 'detailed' in hover_toggle
+        return 'hover_detailed' in hover_toggle
     
     @app.callback(
         Output('selected-annotation-columns', 'data'),

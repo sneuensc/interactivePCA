@@ -622,7 +622,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     time_split = 100 - pca_split
     
     left_pane = html.Div([
-        html.Div(pca_plot, style={'flex': f'0 0 {pca_split}%', 'overflow': 'hidden'}),
+        html.Div(pca_plot, style={'flex': f'0 0 {pca_split}%', 'overflow': 'hidden', 'padding': '5px'}),
         html.Div(
             id='pca-time-resizer',
             style={
@@ -631,6 +631,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 'cursor': 'row-resize',
                 'userSelect': 'none',
                 'flex': '0 0 8px',
+                'marginLeft': '5px',
+                'marginRight': '5px',
                 'transition': 'background-color 0.2s',
                 'position': 'relative',
                 'zIndex': 5,
@@ -638,7 +640,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             },
             title='Drag to resize panes'
         ),
-        html.Div(time_hist, style={'flex': f'0 0 {time_split}%', 'overflow': 'hidden'})
+        html.Div(time_hist, style={'flex': f'0 0 {time_split}%', 'overflow': 'hidden', 'padding': '5px'})
     ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
     
     # Map plot (top right) + Annotation table (bottom right)
@@ -697,7 +699,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     table_split = 100 - map_split
     
     map_section = html.Div([
-        html.Div(map_plot, style={'flex': f'0 0 {map_split}%', 'overflow': 'hidden'}),
+        html.Div(map_plot, style={'flex': f'0 0 {map_split}%', 'overflow': 'hidden', 'padding': '5px'}),
         html.Div(
             id='map-table-resizer',
             style={
@@ -706,6 +708,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 'cursor': 'row-resize',
                 'userSelect': 'none',
                 'flex': '0 0 8px',
+                'marginLeft': '5px',
+                'marginRight': '5px',
                 'transition': 'background-color 0.2s',
                 'position': 'relative',
                 'zIndex': 5,
@@ -716,12 +720,12 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         html.Div([
             html.Div([
                 annotation_table
-            ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden'}),
+            ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden', 'padding': '5px'}),
             html.Div([
-                html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 12px', 'paddingTop': '12px'}),
+                html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 5px', 'paddingTop': '5px'}),
                 query_field,
-                html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 12px', 'marginTop': '5px'})
-            ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6'})
+                html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 5px', 'marginTop': '5px'})
+            ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6', 'padding': '0 5px 5px 5px'})
         ], style={'flex': f'0 0 {table_split}%', 'display': 'flex', 'flexDirection': 'column', 'minHeight': '0', 'overflow': 'hidden'})
     ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
     

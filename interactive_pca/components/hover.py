@@ -72,10 +72,12 @@ def build_hover_text(df, annotation_desc, group=None, detailed=False, selected_c
                     text_parts.append(f"<span style='color:{color}'><b>{group}:</b> {group_val}</span>")
                 else:
                     text_parts.append(f"<b>{group}:</b> {group_val}")
+        # Add other display columns, excluding the group column to avoid duplicates
         for col in display_cols:
-            val = row[col]
-            if pd.notna(val):
-                text_parts.append(f"<b>{col}:</b> {val}")
+            if col != group:  # Skip group column as it's already added above
+                val = row[col]
+                if pd.notna(val):
+                    text_parts.append(f"<b>{col}:</b> {val}")
         hover_texts.append("<br>".join(text_parts))
     
     return hover_texts
@@ -133,16 +135,18 @@ def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed
     return fig
 
 
-def register_hover_update_callbacks(app, df, annotation_desc):
+def register_hover_update_callbacks(app, args, df, annotation_desc):
     """
     Register hover update callbacks for all three plots.
     
-    This factory function creates 6 callbacks (2 per plot):
+    This factory function creates callbacks for:
     - Update hover on 'hover-detailed' toggle
     - Update hover on 'selected-annotation-columns' change
+    - Update hover on 'dropdown-group' change
     
     Args:
         app: Dash app instance
+        args: Command-line arguments (for getting default aesthetics)
         df: DataFrame with sample data
         annotation_desc: DataFrame describing annotation columns
     """
@@ -181,4 +185,22 @@ def register_hover_update_callbacks(app, df, annotation_desc):
         def update_hover_columns(selected_cols, current_fig, group, hover_detailed, aesthetics_store, pt=plot_type):
             """Update plot hover when selected columns change."""
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
+            return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, pt)
+        
+        # Callback for group change
+        @app.callback(
+            Output(plot_id, 'figure', allow_duplicate=True),
+            Input('dropdown-group', 'value'),
+            State(plot_id, 'figure'),
+            State('hover-detailed', 'data'),
+            State('selected-annotation-columns', 'data'),
+            State('marker-aesthetics-store', 'data'),
+            prevent_initial_call=True
+        )
+        def update_hover_group(group, current_fig, hover_detailed, selected_cols, aesthetics_store, pt=plot_type):
+            """Update plot hover when group changes."""
+            from ..components import get_aesthetics_for_group
+            # Get aesthetics for the NEW group from the store or generate defaults
+            aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
+            group_colors = aesthetics.get('color', {}) if aesthetics else {}
             return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, pt)
