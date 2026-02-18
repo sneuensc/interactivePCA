@@ -55,6 +55,8 @@ def build_hover_text(df, annotation_desc, group=None, detailed=False, selected_c
         else:
             display_cols = [col for col in annotation_desc.columns if col != 'id']
         display_cols = [col for col in display_cols if col in df.columns]
+    # Remove ID column to avoid duplicating the explicit ID line
+    display_cols = [col for col in display_cols if col.lower() != 'id']
     
     for idx, row in df.iterrows():
         text_parts = [f"<b>ID:</b> {row['id']}"]
