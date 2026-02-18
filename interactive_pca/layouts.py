@@ -681,7 +681,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     )
     
     query_field = dcc.Textarea(
-        id='query-field',
+        id='pca-filter-query',
         placeholder='Enter pandas query (e.g. Age > 1000 & Country == "Peru")',
         style={
             'width': '100%',
@@ -714,29 +714,15 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             title='Drag to resize panes'
         ),
         html.Div([
-            annotation_table
-        ], style={'flex': f'0 0 {table_split}%', 'overflow': 'hidden'}),
-        html.Div([
-            html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 12px', 'paddingTop': '12px'}),
-            query_field,
-            html.Button(
-                'Apply Filter',
-                id='apply-query-button',
-                style={
-                    'marginTop': '8px',
-                    'marginLeft': '12px',
-                    'marginRight': '12px',
-                    'marginBottom': '12px',
-                    'padding': '6px 12px',
-                    'border': '1px solid #0066cc',
-                    'borderRadius': '4px',
-                    'backgroundColor': '#0066cc',
-                    'color': '#ffffff',
-                    'cursor': 'pointer',
-                    'fontSize': '12px'
-                }
-            )
-        ], style={'flex': '0 0 auto', 'minHeight': '0', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6'})
+            html.Div([
+                annotation_table
+            ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden'}),
+            html.Div([
+                html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 12px', 'paddingTop': '12px'}),
+                query_field,
+                html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 12px', 'marginTop': '5px'})
+            ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6'})
+        ], style={'flex': f'0 0 {table_split}%', 'display': 'flex', 'flexDirection': 'column', 'minHeight': '0', 'overflow': 'hidden'})
     ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
     
     # Aesthetics modal
