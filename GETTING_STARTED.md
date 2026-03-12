@@ -53,7 +53,7 @@ interactive-pca --eigenvec data/samples.eigenvec \
                  --open_browser
 ```
 
-Then open http://localhost:8050 in your browser.
+Then open <http://localhost:8050> in your browser.
 
 ### Method 3: Jupyter Notebook
 
@@ -157,16 +157,19 @@ pytest tests/ --cov=interactive_pca --cov-report=html
 ### Code Quality
 
 Format code with Black:
+
 ```bash
 black interactive_pca/
 ```
 
 Sort imports with isort:
+
 ```bash
 isort interactive_pca/
 ```
 
 Check with flake8:
+
 ```bash
 flake8 interactive_pca/
 ```
@@ -178,16 +181,18 @@ The package is organized into modules:
 - **utils.py** - Utility functions for text processing and data manipulation
 - **args.py** - Command-line argument parser
 - **data_loader.py** - Data loading and preprocessing functions
-- **cli.py** - Command-line interface entry point
-- **app.py** - (Future) Dash application factory
-- **callbacks.py** - (Future) Dash callback handlers
-- **plots.py** - (Future) Plotting functions
+- **cli.py** - Command-line entry point (`interactive-pca`)
+- **app.py** - Dash application factory
+- **plots.py** - Plot generation helpers
+- **layouts/** - Layout creation for main UI panels
+- **callbacks/** - Callback logic (selection, plots, aesthetics)
+- **components/** - Reusable table/hover/aesthetics helpers
 
 ## Next Steps
 
-1. **Explore the data**: Use the utilities to load and inspect your data
-2. **Integrate the Dash app**: Check `interactive_pca/app.py` (when ready) for the web interface
-3. **Customize**: Modify the code to add your own visualizations
+1. **Explore the data**: Use data loaders and utilities to inspect your inputs
+2. **Run the dashboard**: Start with `interactive-pca --eigenvec ...` and add optional panels via annotation/map/time args
+3. **Customize behavior**: Edit `interactive_pca/layouts/__init__.py` and `interactive_pca/callbacks/`
 4. **Contribute**: Submit improvements via pull requests
 
 ## Troubleshooting
@@ -195,6 +200,7 @@ The package is organized into modules:
 ### Module not found
 
 Ensure the package is installed in editable mode:
+
 ```bash
 pip install -e .
 ```
@@ -202,6 +208,7 @@ pip install -e .
 ### Import errors
 
 Check that all dependencies are installed:
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -213,6 +220,7 @@ Ensure your input files are in the correct format. See README.md for format spec
 ## Support
 
 For issues and questions:
+
 1. Check the README.md
 2. Look at example files in the `data/` directory
 3. Open an issue on GitHub
