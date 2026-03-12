@@ -1,16 +1,24 @@
 # interactivePCA
 
-Interactive PCA visualization with Dash - a Python package for interactive exploration of PCA results.
+**Interactive PCA visualization with Dash - a Python package for interactive exploration of PCA results.**
 
-## Features
+The interactivePCA allows users to visualize PCA or MDS scatter plots together with linked geographical and temporal dimensions, making it easy to explore population structure across space and time through interactive selection, zooming, and annotation-aware highlighting.
 
-- **Interactive 2D/3D PCA plots** with Plotly
-- **Geographical visualization** of samples on maps
-- **Time series plotting** with range selection
-- **Data tables** with filtering and selection
-- **Aesthetic customization** (colors, sizes, symbols)
-- **Multiple data formats** support (PLINK eigenvec, annotation files)
-- **Web-based dashboard** using Dash
+**Main features**
+- **3 plots + 1 table**
+  - Interactive 2D/3D PCA or MDS scatter plot
+  - Geographic map view of sample locations
+  - Time plot for chronological exploration
+  - Annotation table linked to all views
+- **Interactive plots**
+  - Zoom, pan, and drag navigation
+  - Point selection and cross-highlighting
+  - Rich hover tooltips
+  - Customizable point styling (color, symbol, size, opacity)
+- **Interactive table**
+  - Row-based sample selection
+  - Flexible annotation/column display
+
 
 ## Installation
 
@@ -22,19 +30,29 @@ cd interactive-pca
 pip install -e .
 ```
 
-### From PyPI (when available)
-
-```bash
-pip install interactive-pca
-```
-
-### Development installation
-
-```bash
-pip install -e ".[dev]"
-```
-
 ## Quick Start
+
+### Command-line interface
+
+```bash
+interactive-pca --eigenvec data/samples.eigenvec \
+                 --annotation data/samples.anno \
+                 --latitude Latitude \
+                 --longitude Longitude \
+                 --time Date
+```
+
+Then open http://localhost:8050 in your web browser.
+
+### Minimal command-line interface
+Showing only PCA scatter plot
+
+```bash
+interactive-pca --eigenvec data/samples.eigenvec
+```
+
+Then open http://localhost:8050 in your web browser.
+
 
 ### As a Python module
 
@@ -52,18 +70,7 @@ annotation, ann_desc, ann_cols = load_annotation(args.annotation, args)
 # Your analysis here
 ```
 
-### Command-line interface
 
-```bash
-interactive-pca --eigenvec data/samples.eigenvec \
-                 --annotation data/samples.anno \
-                 --latitude Latitude \
-                 --longitude Longitude \
-                 --time Date \
-                 --server_port 8050
-```
-
-Then open http://localhost:8050 in your web browser.
 
 ## Requirements
 
@@ -107,62 +114,16 @@ interactive_pca/
 └── app.py                # Main Dash app (future)
 ```
 
-## Development
-
-### Running tests
-
-```bash
-pytest tests/
-```
-
-### Code formatting
-
-```bash
-black interactive_pca/
-isort interactive_pca/
-```
-
-### Linting
-
-```bash
-flake8 interactive_pca/
-```
-
 ## License
 
-MIT License - see LICENSE file for details
+Not yet set
 
-## Citation
-
-If you use interactivePCA in your research, please cite:
-
-```
-[Your citation here]
-```
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests if applicable
-5. Run tests and linting
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
 
 ## Support
 
 For issues and questions, please open an issue on GitHub or contact the maintainers.
 
-## Authors
+## Author
 
-- Your Name (your.email@example.com)
+  Samuel Neuenschwander (samuel.neuenschwander@unil.ch)
 
-## Acknowledgments
-
-- PLINK project for eigenvector/eigenvalue format
-- Plotly for interactive visualization
-- Dash for the web framework
