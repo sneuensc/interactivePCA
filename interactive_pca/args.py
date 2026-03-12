@@ -66,7 +66,7 @@ def create_parser(script_name='Script'):
                        help='Ignore space differences in annotation')
     parser.add_argument('--col_abbrev', type=int, default=15, 
                        help='Abbreviate column names to this length (0 for no abbreviation)')
-    parser.add_argument('--legend_abbrev', type=int, default=0, 
+    parser.add_argument('--legend_abbrev', type=int, default=30, 
                        help='Abbreviate legend text to this length (0 for no abbreviation)')
     parser.add_argument('--max_factors', type=int, default=400, 
                        help='Maximum number of different elements in factorial columns to be included')
