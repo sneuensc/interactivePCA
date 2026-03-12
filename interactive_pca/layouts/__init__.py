@@ -113,15 +113,22 @@ def create_layout(args, df, pcs,
                 html.Li([html.Strong('Annotation Table: '), 'Browse and filter sample metadata. Select visible columns to customize hover information.']),
             ]),
             
-            html.H4('Interactive Controls', style={'marginTop': '20px'}),
+            html.H4('Interactive Plots', style={'marginTop': '20px'}),
             html.Ul([
                 html.Li([html.Strong('Group by: '), 'Color and group samples by any categorical or continuous variable.']),
                 html.Li([html.Strong('Hover detailed: '), 'Toggle between minimal hover info (ID + group) and detailed info (all selected annotation columns).']),
                 html.Li([html.Strong('Lasso selection: '), 'Select samples across all plots simultaneously.']),
                 html.Li([html.Strong('3D toggle: '), 'Switch between 2D and 3D PCA views.']),
-                html.Li([html.Strong('Legend toggle: '), 'Show/hide legends for categorical groupings.']),
+                html.Li([html.Strong('Legend toggle: '), 'Show/hide legends.']),
             ]),
             
+            html.H4('Interactive Table', style={'marginTop': '20px'}),
+            html.Ul([
+                html.Li([html.Strong('Select columns to display: '), 'Under the tab "Annotation" you can select the columns to be shown in the Annotation table.']),
+                html.Li([html.Strong('Sample selection: '), 'Select samples in the Annotation table']),
+                html.Li([html.Strong('filter query: '), 'Use pandas query() to filter samples below the Annotation table.']),
+            ]),
+
             html.H4('Hover Information', style={'marginTop': '20px'}),
             html.P([
                 'Hover over any point to see sample information. Use the "Hover detailed" checkbox in the PCA tab to toggle between:',
