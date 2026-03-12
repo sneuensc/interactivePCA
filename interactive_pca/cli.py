@@ -26,6 +26,36 @@ def setup_logging(args):
     
     logging.getLogger().setLevel(level)
 
+    # Suppress noisy Flask/Dash startup messages unless in dev mode
+    if not args.dev:
+        logging.getLogger('werkzeug').setLevel(logging.ERROR)
+        logging.getLogger('dash').setLevel(logging.ERROR)
+
+
+def print_banner(parsed_args):
+    """Print a startup banner summarising the active panels."""
+    url = f"http://localhost:{parsed_args.server_port}"
+    sep = "=" * 60
+
+    panels = ["• PCA scatter plot (always active)"]
+    if parsed_args.annotation:
+        panels.append("• Annotation table")
+    if parsed_args.latitude and parsed_args.longitude:
+        panels.append("• Geographic map")
+    if parsed_args.time:
+        panels.append("• Time histogram")
+
+    print(f"\n{sep}")
+    print("  🚀  interactivePCA")
+    print(sep)
+    print(f"\n  Open your browser and navigate to:")
+    print(f"      {url}")
+    print(f"\n  Active panels:")
+    for panel in panels:
+        print(f"      {panel}")
+    print(f"\n  Press Ctrl+C to stop the server")
+    print(f"{sep}\n")
+
 
 def main(args=None):
     """
@@ -53,9 +83,8 @@ def main(args=None):
         from .app import create_app
         app = create_app(parsed_args)
         
-        # Run the app
         url = f"http://localhost:{parsed_args.server_port}"
-        logging.info(f"Dashboard running at {url}")
+        print_banner(parsed_args)
         
         if parsed_args.open_browser:
             import webbrowser
