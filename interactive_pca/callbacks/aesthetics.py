@@ -485,9 +485,6 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                             group_aesthetics['symbol_map'][key] = symbol_val
         else:
             # For categorical, update colors from color pickers and size/opacity/symbol from AG Grid
-            default_size = group_aesthetics['size']['default']
-            default_opacity = group_aesthetics['opacity']['default']
-            default_symbol = group_aesthetics['symbol']['default']
             
             # Update colors from pattern-matched color pickers
             if color_values and color_ids:
@@ -502,9 +499,46 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     group_aesthetics['color'][key] = val
             
             # Update size/opacity/symbol from AG Grid rowData
+            # Process 'default' row first to get the new default values
             if row_data:
+                # First pass: update 'default' values
                 for row in row_data:
                     key = row['Group']
+                    if key == 'default':
+                        # Size
+                        size_val = row.get('Size')
+                        if size_val and size_val != '-' and size_val != '':
+                            try:
+                                group_aesthetics['size']['default'] = int(size_val)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Opacity
+                        opacity_val = row.get('Opacity')
+                        if opacity_val and opacity_val != '-' and opacity_val != '':
+                            try:
+                                group_aesthetics['opacity']['default'] = float(opacity_val)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Symbol
+                        symbol_val = row.get('Symbol')
+                        if symbol_val and symbol_val != '-' and symbol_val != '':
+                            group_aesthetics['symbol']['default'] = symbol_val
+                        break
+                
+                # Get (potentially updated) default values
+                default_size = group_aesthetics['size']['default']
+                default_opacity = group_aesthetics['opacity']['default']
+                default_symbol = group_aesthetics['symbol']['default']
+                
+                # Second pass: update all other rows using the new defaults
+                for row in row_data:
+                    key = row['Group']
+                    
+                    # Skip 'default' row (already processed)
+                    if key == 'default':
+                        continue
                     
                     # Handle type conversion - AG Grid may serialize numeric keys as strings
                     if key not in group_aesthetics['size']:

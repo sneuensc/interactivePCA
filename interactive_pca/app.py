@@ -58,6 +58,19 @@ def create_app(args):
     ANNOTATION_TIME = annotation_cols.get('time')
     ANNOTATION_LAT = annotation_cols.get('latitude')
     ANNOTATION_LONG = annotation_cols.get('longitude')
+    show_annotation_table = annotation_desc is not None
+    show_map_plot = (
+        show_annotation_table
+        and ANNOTATION_LAT is not None
+        and ANNOTATION_LONG is not None
+        and ANNOTATION_LAT in df.columns
+        and ANNOTATION_LONG in df.columns
+    )
+    show_time_plot = (
+        show_annotation_table
+        and ANNOTATION_TIME is not None
+        and ANNOTATION_TIME in df.columns
+    )
     
     # Initialize selected IDs
     if args.selectedID:
@@ -245,7 +258,14 @@ def create_app(args):
     )
     
     # Register hover update callbacks (factory pattern)
-    register_hover_update_callbacks(app, args, df, annotation_desc)
+    register_hover_update_callbacks(
+        app,
+        args,
+        df,
+        annotation_desc,
+        show_map_plot=show_map_plot,
+        show_time_plot=show_time_plot,
+    )
     
     # Register all application callbacks
     register_all_callbacks(

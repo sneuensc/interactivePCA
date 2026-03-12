@@ -91,7 +91,7 @@ def create_layout(args, df, pcs,
         })
     
     # Help tab
-    from .args import create_parser
+    from ..args import create_parser
     parser = create_parser()
     
     help_content = html.Div([
@@ -534,10 +534,26 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         style={'height': '100%'}
     )
 
+    # Optional panels
+    show_annotation_table = annotation_desc is not None
+    show_map_plot = (
+        show_annotation_table
+        and ANNOTATION_LAT is not None
+        and ANNOTATION_LONG is not None
+        and ANNOTATION_LAT in df.columns
+        and ANNOTATION_LONG in df.columns
+        and init_map_fig is not None
+    )
+    show_time_plot = (
+        show_annotation_table
+        and ANNOTATION_TIME is not None
+        and ANNOTATION_TIME in df.columns
+    )
+
     # Time/continuous plot below PCA plot
     time_hist = html.Div()
     continuous_columns = continuous_columns or []
-    default_continuous = ANNOTATION_TIME if ANNOTATION_TIME in continuous_columns else (continuous_columns[0] if continuous_columns else None)
+    default_continuous = ANNOTATION_TIME if show_time_plot else None
     if default_continuous is not None and default_continuous in df.columns:
         time_vals = df[default_continuous].dropna()
         if time_vals.empty:
@@ -616,44 +632,46 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 )
             ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
     
-    # Create left pane with PCA plot and time histogram (with vertical resizer)
-    from .components import LAYOUT_CONFIG
-    pca_split = int(LAYOUT_CONFIG["pca_time_split"] * 100)
-    time_split = 100 - pca_split
-    
-    left_pane = html.Div([
-        html.Div(pca_plot, style={'flex': f'0 0 {pca_split}%', 'overflow': 'hidden', 'padding': '5px'}),
-        html.Div(
-            id='pca-time-resizer',
-            style={
-                'height': '8px',
-                'backgroundColor': '#bbb',
-                'cursor': 'row-resize',
-                'userSelect': 'none',
-                'flex': '0 0 8px',
-                'marginLeft': '5px',
-                'marginRight': '5px',
-                'transition': 'background-color 0.2s',
-                'position': 'relative',
-                'zIndex': 5,
-                'pointerEvents': 'auto'
-            },
-            title='Drag to resize panes'
-        ),
-        html.Div(time_hist, style={'flex': f'0 0 {time_split}%', 'overflow': 'hidden', 'padding': '5px'})
-    ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
+    # Create left pane with optional time plot
+    from ..components import LAYOUT_CONFIG
+    if show_time_plot:
+        pca_split = int(LAYOUT_CONFIG["pca_time_split"] * 100)
+        time_split = 100 - pca_split
+
+        left_pane = html.Div([
+            html.Div(pca_plot, style={'flex': f'0 0 {pca_split}%', 'overflow': 'hidden', 'padding': '5px'}),
+            html.Div(
+                id='pca-time-resizer',
+                style={
+                    'height': '8px',
+                    'backgroundColor': '#bbb',
+                    'cursor': 'row-resize',
+                    'userSelect': 'none',
+                    'flex': '0 0 8px',
+                    'marginLeft': '5px',
+                    'marginRight': '5px',
+                    'transition': 'background-color 0.2s',
+                    'position': 'relative',
+                    'zIndex': 5,
+                    'pointerEvents': 'auto'
+                },
+                title='Drag to resize panes'
+            ),
+            html.Div(time_hist, style={'flex': f'0 0 {time_split}%', 'overflow': 'hidden', 'padding': '5px'})
+        ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
+    else:
+        left_pane = html.Div([
+            html.Div(pca_plot, style={'flex': '1 1 auto', 'overflow': 'hidden', 'padding': '5px'})
+        ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
     
     # Map plot (top right) + Annotation table (bottom right)
     map_plot = html.Div()
-    if ANNOTATION_LAT is not None and ANNOTATION_LONG is not None and init_map_fig is not None:
+    if show_map_plot:
         map_plot = dcc.Graph(
             id='pca-map-plot',
             figure=init_map_fig,
             style={'height': '100%'}
         )
-    else:
-        map_plot = html.Div('No geographical coordinates available',
-                           style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center', 'color': '#999', 'height': '100%'})
     
     # Annotation table
     table_data = []
@@ -669,65 +687,83 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             else:
                 column_defs.append(create_standard_column_def(col, col, minWidth=100))
     
-    annotation_table = dag.AgGrid(
-        id='pca-annotation-table',
-        rowData=table_data,
-        columnDefs=column_defs,
-        defaultColDef={'resizable': True, 'sortable': True, 'filter': True},
-        dashGridOptions={
-            'pagination': True,
-            'paginationPageSize': 20,
-            'animateRows': False
-        },
-        style={'height': '100%', 'width': '100%'}
-    )
+    annotation_table = None
+    if show_annotation_table:
+        annotation_table = dag.AgGrid(
+            id='pca-annotation-table',
+            rowData=table_data,
+            columnDefs=column_defs,
+            defaultColDef={'resizable': True, 'sortable': True, 'filter': True},
+            dashGridOptions={
+                'pagination': True,
+                'paginationPageSize': 20,
+                'animateRows': False
+            },
+            style={'height': '100%', 'width': '100%'}
+        )
     
-    query_field = dcc.Textarea(
-        id='pca-filter-query',
-        placeholder='Enter pandas query (e.g. Age > 1000 & Country == "Peru")',
-        style={
-            'width': '100%',
-            'height': f'{LAYOUT_CONFIG["query_field_height"]}px',
-            'fontFamily': 'monospace',
-            'fontSize': '12px',
-            'resize': 'vertical'
-        }
-    )
+    query_field = None
+    if show_annotation_table:
+        query_field = dcc.Textarea(
+            id='pca-filter-query',
+            placeholder='Enter pandas query (e.g. Age > 1000 & Country == "Peru")',
+            style={
+                'width': '100%',
+                'height': f'{LAYOUT_CONFIG["query_field_height"]}px',
+                'fontFamily': 'monospace',
+                'fontSize': '12px',
+                'resize': 'vertical'
+            }
+        )
     
     # Right pane with map (top), table (middle), and filter textarea (bottom)
-    map_split = int(LAYOUT_CONFIG["map_table_split"] * 100)
-    table_split = 100 - map_split
-    
-    map_section = html.Div([
-        html.Div(map_plot, style={'flex': f'0 0 {map_split}%', 'overflow': 'hidden', 'padding': '5px'}),
-        html.Div(
-            id='map-table-resizer',
-            style={
-                'height': '8px',
-                'backgroundColor': '#bbb',
-                'cursor': 'row-resize',
-                'userSelect': 'none',
-                'flex': '0 0 8px',
-                'marginLeft': '5px',
-                'marginRight': '5px',
-                'transition': 'background-color 0.2s',
-                'position': 'relative',
-                'zIndex': 5,
-                'pointerEvents': 'auto'
-            },
-            title='Drag to resize panes'
-        ),
-        html.Div([
-            html.Div([
-                annotation_table
-            ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden', 'padding': '5px'}),
-            html.Div([
-                html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 5px', 'paddingTop': '5px'}),
-                query_field,
-                html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 5px', 'marginTop': '5px'})
-            ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6', 'padding': '0 5px 5px 5px'})
-        ], style={'flex': f'0 0 {table_split}%', 'display': 'flex', 'flexDirection': 'column', 'minHeight': '0', 'overflow': 'hidden'})
-    ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
+    map_section = None
+    if show_annotation_table:
+        if show_map_plot:
+            map_split = int(LAYOUT_CONFIG["map_table_split"] * 100)
+            table_split = 100 - map_split
+
+            map_section = html.Div([
+                html.Div(map_plot, style={'flex': f'0 0 {map_split}%', 'overflow': 'hidden', 'padding': '5px'}),
+                html.Div(
+                    id='map-table-resizer',
+                    style={
+                        'height': '8px',
+                        'backgroundColor': '#bbb',
+                        'cursor': 'row-resize',
+                        'userSelect': 'none',
+                        'flex': '0 0 8px',
+                        'marginLeft': '5px',
+                        'marginRight': '5px',
+                        'transition': 'background-color 0.2s',
+                        'position': 'relative',
+                        'zIndex': 5,
+                        'pointerEvents': 'auto'
+                    },
+                    title='Drag to resize panes'
+                ),
+                html.Div([
+                    html.Div([
+                        annotation_table
+                    ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden', 'padding': '5px'}),
+                    html.Div([
+                        html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 5px', 'paddingTop': '5px'}),
+                        query_field,
+                        html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 5px', 'marginTop': '5px'})
+                    ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6', 'padding': '0 5px 5px 5px'})
+                ], style={'flex': f'0 0 {table_split}%', 'display': 'flex', 'flexDirection': 'column', 'minHeight': '0', 'overflow': 'hidden'})
+            ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
+        else:
+            map_section = html.Div([
+                html.Div([
+                    annotation_table
+                ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden', 'padding': '5px'}),
+                html.Div([
+                    html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 5px', 'paddingTop': '5px'}),
+                    query_field,
+                    html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 5px', 'marginTop': '5px'})
+                ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6', 'padding': '0 5px 5px 5px'})
+            ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
     
     # Aesthetics modal
     return html.Div([
@@ -796,42 +832,57 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         dcc.Download(id='download-aesthetics'),
         html.Div(
             id='pca-plots-container',
-            children=[
-                html.Div(
-                    id='pca-left-pane',
-                    children=left_pane,
-                    style={
-                        'flex': '0 0 50%',
-                        'overflow': 'hidden',
-                        'position': 'relative'
-                    },
-                    **{'data-pane': 'left'}
-                ),
-                html.Div(
-                    id='pca-vertical-resizer',
-                    style={
-                        'width': '8px',
-                        'backgroundColor': '#bbb',
-                        'cursor': 'col-resize',
-                        'userSelect': 'none',
-                        'flex': '0 0 8px',
-                        'transition': 'background-color 0.2s',
-                        'position': 'relative',
-                        'zIndex': 5,
-                        'pointerEvents': 'auto'
-                    },
-                    title='Drag to resize panes'
-                ),
-                html.Div(
-                    id='pca-right-pane',
-                    children=map_section,
-                    style={
-                        'flex': '0 0 50%',
-                        'overflow': 'hidden'
-                    },
-                    **{'data-pane': 'right'}
-                )
-            ],
+            children=(
+                [
+                    html.Div(
+                        id='pca-left-pane',
+                        children=left_pane,
+                        style={
+                            'flex': '0 0 50%',
+                            'overflow': 'hidden',
+                            'position': 'relative'
+                        },
+                        **{'data-pane': 'left'}
+                    ),
+                    html.Div(
+                        id='pca-vertical-resizer',
+                        style={
+                            'width': '8px',
+                            'backgroundColor': '#bbb',
+                            'cursor': 'col-resize',
+                            'userSelect': 'none',
+                            'flex': '0 0 8px',
+                            'transition': 'background-color 0.2s',
+                            'position': 'relative',
+                            'zIndex': 5,
+                            'pointerEvents': 'auto'
+                        },
+                        title='Drag to resize panes'
+                    ),
+                    html.Div(
+                        id='pca-right-pane',
+                        children=map_section,
+                        style={
+                            'flex': '0 0 50%',
+                            'overflow': 'hidden'
+                        },
+                        **{'data-pane': 'right'}
+                    )
+                ]
+                if show_annotation_table else
+                [
+                    html.Div(
+                        id='pca-left-pane',
+                        children=left_pane,
+                        style={
+                            'flex': '1 1 auto',
+                            'overflow': 'hidden',
+                            'position': 'relative'
+                        },
+                        **{'data-pane': 'left'}
+                    )
+                ]
+            ),
             style={
                 'display': 'flex',
                 'gap': '0',

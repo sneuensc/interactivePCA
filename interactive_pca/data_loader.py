@@ -5,7 +5,7 @@ Data loading and preprocessing module.
 import logging
 import os
 import pandas as pd
-from .utils import make_unique_abbr, get_abbr_of, deduplicate_columns, find_incrementing_prefix_series
+from .utils import make_unique_abbr, make_unique_abbr_of_df, get_abbr_of, deduplicate_columns, find_incrementing_prefix_series
 
 
 def load_imiss(filepath):

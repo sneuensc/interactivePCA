@@ -24,8 +24,39 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
         ANNOTATION_LAT: Latitude column name
         ANNOTATION_LONG: Longitude column name
     """
-    register_selection_callbacks(app, df, annotation_desc)
-    register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNOTATION_TIME, annotation_desc)
+    show_annotation_table = annotation_desc is not None
+    show_map_plot = (
+        show_annotation_table
+        and ANNOTATION_LAT is not None
+        and ANNOTATION_LONG is not None
+        and ANNOTATION_LAT in df.columns
+        and ANNOTATION_LONG in df.columns
+    )
+    show_time_plot = (
+        show_annotation_table
+        and ANNOTATION_TIME is not None
+        and ANNOTATION_TIME in df.columns
+    )
+
+    register_selection_callbacks(
+        app,
+        df,
+        annotation_desc,
+        show_annotation_table=show_annotation_table,
+        show_map_plot=show_map_plot,
+        show_time_plot=show_time_plot,
+    )
+    register_plot_callbacks(
+        app,
+        args,
+        df,
+        ANNOTATION_LAT,
+        ANNOTATION_LONG,
+        ANNOTATION_TIME,
+        annotation_desc,
+        show_map_plot=show_map_plot,
+        show_time_plot=show_time_plot,
+    )
     register_aesthetics_callbacks(app, args, df, annotation_desc)
 
 

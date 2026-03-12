@@ -137,7 +137,7 @@ def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed
     return fig
 
 
-def register_hover_update_callbacks(app, args, df, annotation_desc):
+def register_hover_update_callbacks(app, args, df, annotation_desc, show_map_plot=True, show_time_plot=True):
     """
     Register hover update callbacks for all three plots.
     
@@ -151,12 +151,16 @@ def register_hover_update_callbacks(app, args, df, annotation_desc):
         args: Command-line arguments (for getting default aesthetics)
         df: DataFrame with sample data
         annotation_desc: DataFrame describing annotation columns
+        show_map_plot: Whether the map plot is rendered and should receive hover callbacks
+        show_time_plot: Whether the time plot is rendered and should receive hover callbacks
     """
-    plots = [
-        ('pca-plot', 'pca'),
-        ('pca-map-plot', 'map'),
-        ('time-histogram', 'time')
-    ]
+    plots = [('pca-plot', 'pca')]
+
+    if show_map_plot:
+        plots.append(('pca-map-plot', 'map'))
+
+    if show_time_plot:
+        plots.append(('time-histogram', 'time'))
     
     for plot_id, plot_type in plots:
         # Callback for hover-detailed toggle
