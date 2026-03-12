@@ -14,9 +14,9 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import html, dcc
 
-from .utils import strip_ansi, dict_of_dicts_to_tuple
-from .plots import generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map
-from .components import (
+from ..utils import strip_ansi, dict_of_dicts_to_tuple
+from ..plots import generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map
+from ..components import (
     create_checkbox_column_def,
     create_standard_column_def,
     load_aesthetics_file,
