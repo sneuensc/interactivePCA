@@ -237,6 +237,9 @@ def create_layout(args, df, pcs,
         dcc.Store(id='selection-store', data=init_selected_ids),  # Selected IDs for cross-plot sync
         dcc.Store(id='hover-detailed', data=False),  # Toggle for detailed hover information
         dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
+        dcc.Store(id='hover-sync-dummy', data=None),  # Dummy output for hover-sync clientside callback
+        dcc.Store(id='right-panel-tabs-dummy', data=None),  # Dummy output for right-panel tab switching
+        dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         
         # Header with tabs
         html.Div([
@@ -538,7 +541,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     pca_plot = dcc.Graph(
         id='pca-plot',
         figure=init_fig,
-        style={'height': '100%'}
+        style={'height': '100%'},
+        clear_on_unhover=True
     )
 
     # Optional panels
@@ -635,7 +639,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 dcc.Graph(
                     id='time-histogram',
                     figure=fig_time,
-                    style={'height': '100%'}
+                    style={'height': '100%'},
+                    clear_on_unhover=True
                 )
             ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
     
@@ -677,7 +682,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         map_plot = dcc.Graph(
             id='pca-map-plot',
             figure=init_map_fig,
-            style={'height': '100%'}
+            style={'height': '100%'},
+            clear_on_unhover=True
         )
     
     # Annotation table
@@ -723,7 +729,56 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             }
         )
     
-    # Right pane with map (top), table (middle), and filter textarea (bottom)
+    # Right pane: map (top, resizable) + 3-tab panel (Table / Details / Filter)
+    tab_style = {'padding': '4px 12px', 'fontSize': '12px'}
+    tab_selected_style = {'padding': '4px 12px', 'fontSize': '12px', 'fontWeight': 'bold'}
+
+    def make_tab_panel(flex_style):
+        """Build the 3-tab panel (Table / Details / Filter)."""
+        return html.Div([
+            dcc.Tabs(
+                id='right-panel-tabs',
+                value='tab-table',
+                children=[
+                    dcc.Tab(label='Table',   value='tab-table',
+                            style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label='Details', value='tab-details',
+                            style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label='Filter',  value='tab-filter',
+                            style=tab_style, selected_style=tab_selected_style),
+                ],
+                style={'flex': '0 0 auto'}
+            ),
+            # Table tab
+            html.Div(
+                annotation_table,
+                id='right-tab-table-content',
+                style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden',
+                       'padding': '5px', 'display': 'flex', 'flexDirection': 'column'}
+            ),
+            # Details tab
+            html.Div(
+                html.Div(
+                    id='hover-details-content',
+                    children='Hover over a point to see details.',
+                    style={'padding': '10px', 'fontSize': '13px', 'color': '#555'}
+                ),
+                id='right-tab-details-content',
+                style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'auto', 'display': 'none'}
+            ),
+            # Filter tab
+            html.Div([
+                html.Div('Filter query (pandas syntax):',
+                         style={'fontWeight': 'bold', 'fontSize': '13px',
+                                'padding': '8px 5px 5px 5px'}),
+                query_field,
+                html.Div(id='pca-filter-error-message',
+                         style={'color': 'red', 'fontSize': '12px',
+                                'padding': '0 5px', 'marginTop': '5px'})
+            ], id='right-tab-filter-content',
+               style={'flex': '1 1 0', 'overflow': 'auto', 'display': 'none', 'padding': '5px'}),
+        ], style={**flex_style, 'display': 'flex', 'flexDirection': 'column', 'minHeight': '0', 'overflow': 'hidden'})
+
     map_section = None
     if show_annotation_table:
         if show_map_plot:
@@ -749,28 +804,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     },
                     title='Drag to resize panes'
                 ),
-                html.Div([
-                    html.Div([
-                        annotation_table
-                    ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden', 'padding': '5px'}),
-                    html.Div([
-                        html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 5px', 'paddingTop': '5px'}),
-                        query_field,
-                        html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 5px', 'marginTop': '5px'})
-                    ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6', 'padding': '0 5px 5px 5px'})
-                ], style={'flex': f'0 0 {table_split}%', 'display': 'flex', 'flexDirection': 'column', 'minHeight': '0', 'overflow': 'hidden'})
+                make_tab_panel({'flex': f'0 0 {table_split}%'}),
             ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
         else:
-            map_section = html.Div([
-                html.Div([
-                    annotation_table
-                ], style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'hidden', 'padding': '5px'}),
-                html.Div([
-                    html.Div('Filter:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '13px', 'padding': '0 5px', 'paddingTop': '5px'}),
-                    query_field,
-                    html.Div(id='pca-filter-error-message', style={'color': 'red', 'fontSize': '12px', 'padding': '0 5px', 'marginTop': '5px'})
-                ], style={'flex': '0 0 auto', 'overflow': 'auto', 'borderTop': '1px solid #dee2e6', 'padding': '0 5px 5px 5px'})
-            ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
+            map_section = make_tab_panel({'flex': '1 1 auto', 'height': '100%'})
     
     # Aesthetics modal
     return html.Div([

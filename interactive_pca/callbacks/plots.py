@@ -455,6 +455,16 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             if time_variable == ANNOTATION_TIME:
                 fig.update_xaxes(autorange='reversed')
 
+            fig.add_trace(go.Scatter(
+                x=[], y=[],
+                mode='markers',
+                marker=dict(size=18, color='rgba(0,0,0,0)', symbol='circle-open',
+                            line=dict(width=2.5, color='black')),
+                name='__hover_highlight__',
+                showlegend=False,
+                hovertemplate='<extra></extra>'
+            ))
+
             # Apply hover text formatting
             fig_dict = fig.to_dict()
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}

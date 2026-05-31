@@ -137,76 +137,91 @@ def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed
     return fig
 
 
-def register_hover_update_callbacks(app, args, df, annotation_desc, show_map_plot=True, show_time_plot=True):
+def register_hover_update_callbacks(app, args, df, annotation_desc,
+                                    show_map_plot=True, show_time_plot=True,
+                                    show_annotation_table=True):
     """
     Register hover update callbacks for all three plots.
-    
-    This factory function creates callbacks for:
-    - Update hover on 'hover-detailed' toggle
-    - Update hover on 'selected-annotation-columns' change
-    - Update hover on 'dropdown-group' change
-    
-    Args:
-        app: Dash app instance
-        args: Command-line arguments (for getting default aesthetics)
-        df: DataFrame with sample data
-        annotation_desc: DataFrame describing annotation columns
-        show_map_plot: Whether the map plot is rendered and should receive hover callbacks
-        show_time_plot: Whether the time plot is rendered and should receive hover callbacks
-    """
-    plots = [('pca-plot', 'pca')]
 
+    Also registers a combiner that writes 'effective-hover-detailed':
+    forced False when the Details tab is active, otherwise equals hover-detailed.
+    All figure-update callbacks read from effective-hover-detailed so the
+    in-plot tooltip is always minimal while the Details panel is open.
+    """
+    # --- effective-hover-detailed combiner -----------------------------------
+    if show_annotation_table:
+        @app.callback(
+            Output('effective-hover-detailed', 'data'),
+            Input('hover-detailed', 'data'),
+            Input('right-panel-tabs', 'value'),
+        )
+        def compute_effective_detailed(hover_detailed, tab_value):
+            return hover_detailed and (tab_value != 'tab-details')
+    else:
+        @app.callback(
+            Output('effective-hover-detailed', 'data'),
+            Input('hover-detailed', 'data'),
+        )
+        def compute_effective_detailed(hover_detailed):
+            return hover_detailed
+
+    # --- per-plot hover template callbacks -----------------------------------
+    plots = [('pca-plot', 'pca')]
     if show_map_plot:
         plots.append(('pca-map-plot', 'map'))
-
     if show_time_plot:
         plots.append(('time-histogram', 'time'))
-    
+
     for plot_id, plot_type in plots:
-        # Callback for hover-detailed toggle
+        # triggered by hover-detailed / tab change (via effective-hover-detailed)
         @app.callback(
             Output(plot_id, 'figure', allow_duplicate=True),
-            Input('hover-detailed', 'data'),
+            Input('effective-hover-detailed', 'data'),
             State(plot_id, 'figure'),
             State('dropdown-group', 'value'),
             State('selected-annotation-columns', 'data'),
             State('marker-aesthetics-store', 'data'),
             prevent_initial_call=True
         )
-        def update_hover(hover_detailed, current_fig, group, selected_cols, aesthetics_store, pt=plot_type):
-            """Update plot hover templates based on detailed flag."""
+        def update_hover(effective_detailed, current_fig, group, selected_cols,
+                         aesthetics_store, pt=plot_type):
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
-            return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, pt)
-        
-        # Callback for selected columns change
+            return update_figure_hover_templates(
+                current_fig, df, annotation_desc, group,
+                effective_detailed, selected_cols, group_colors, pt)
+
+        # triggered by column selection change
         @app.callback(
             Output(plot_id, 'figure', allow_duplicate=True),
             Input('selected-annotation-columns', 'data'),
             State(plot_id, 'figure'),
             State('dropdown-group', 'value'),
-            State('hover-detailed', 'data'),
+            State('effective-hover-detailed', 'data'),
             State('marker-aesthetics-store', 'data'),
             prevent_initial_call=True
         )
-        def update_hover_columns(selected_cols, current_fig, group, hover_detailed, aesthetics_store, pt=plot_type):
-            """Update plot hover when selected columns change."""
+        def update_hover_columns(selected_cols, current_fig, group, effective_detailed,
+                                 aesthetics_store, pt=plot_type):
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
-            return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, pt)
-        
-        # Callback for group change
+            return update_figure_hover_templates(
+                current_fig, df, annotation_desc, group,
+                effective_detailed, selected_cols, group_colors, pt)
+
+        # triggered by group change
         @app.callback(
             Output(plot_id, 'figure', allow_duplicate=True),
             Input('dropdown-group', 'value'),
             State(plot_id, 'figure'),
-            State('hover-detailed', 'data'),
+            State('effective-hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             State('marker-aesthetics-store', 'data'),
             prevent_initial_call=True
         )
-        def update_hover_group(group, current_fig, hover_detailed, selected_cols, aesthetics_store, pt=plot_type):
-            """Update plot hover when group changes."""
+        def update_hover_group(group, current_fig, effective_detailed, selected_cols,
+                               aesthetics_store, pt=plot_type):
             from ..components import get_aesthetics_for_group
-            # Get aesthetics for the NEW group from the store or generate defaults
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
             group_colors = aesthetics.get('color', {}) if aesthetics else {}
-            return update_figure_hover_templates(current_fig, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, pt)
+            return update_figure_hover_templates(
+                current_fig, df, annotation_desc, group,
+                effective_detailed, selected_cols, group_colors, pt)

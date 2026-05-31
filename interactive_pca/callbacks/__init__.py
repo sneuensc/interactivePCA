@@ -7,9 +7,11 @@ This module organizes all Dash callbacks by functionality.
 from .selection import register_selection_callbacks
 from .plots import register_plot_callbacks
 from .aesthetics import register_aesthetics_callbacks
+from .hover_sync import register_hover_sync_callbacks
+from .hover_details import register_hover_details_callback
 
 
-def register_all_callbacks(app, args, df, pcs, annotation_desc, 
+def register_all_callbacks(app, args, df, pcs, annotation_desc,
                            ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG):
     """
     Register all callbacks for the application.
@@ -58,6 +60,17 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
         show_time_plot=show_time_plot,
     )
     register_aesthetics_callbacks(app, args, df, annotation_desc)
+    register_hover_sync_callbacks(
+        app,
+        show_map_plot=show_map_plot,
+        show_time_plot=show_time_plot,
+    )
+    if show_annotation_table:
+        register_hover_details_callback(
+            app, df, annotation_desc,
+            show_map_plot=show_map_plot,
+            show_time_plot=show_time_plot,
+        )
 
 
 __all__ = [
@@ -65,4 +78,5 @@ __all__ = [
     'register_selection_callbacks',
     'register_plot_callbacks',
     'register_aesthetics_callbacks',
+    'register_hover_sync_callbacks',
 ]

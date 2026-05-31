@@ -24,10 +24,6 @@ from .args import create_parser, parse_args, float_0_1
 from .data_loader import (
     load_eigenvec,
     load_annotation,
-    load_eigenval,
-    load_imiss,
-    load_lmiss,
-    load_frq,
     merge_data,
 )
 
@@ -48,10 +44,6 @@ __all__ = [
     # Data loader
     "load_eigenvec",
     "load_annotation",
-    "load_eigenval",
-    "load_imiss",
-    "load_lmiss",
-    "load_frq",
     "merge_data",
     # App
     "create_app",

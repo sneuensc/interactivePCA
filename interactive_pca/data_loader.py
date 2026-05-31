@@ -8,97 +8,6 @@ import pandas as pd
 from .utils import make_unique_abbr, make_unique_abbr_of_df, get_abbr_of, deduplicate_columns, find_incrementing_prefix_series
 
 
-def load_imiss(filepath):
-    """
-    Load PLINK imiss file (individual missing rate).
-    
-    Args:
-        filepath: Path to imiss file
-    
-    Returns:
-        DataFrame or None if not provided
-    """
-    if filepath is None:
-        return None
-    
-    logging.info(f"Reading imiss file '{filepath}' ...")
-    df_imiss = pd.read_csv(filepath, sep=r"\s+", skiprows=[1])
-    logging.info(f"Reading imiss file '{filepath}' ... done.")
-    return df_imiss
-
-
-def load_lmiss(filepath):
-    """
-    Load PLINK lmiss file (SNP missing rate).
-    
-    Args:
-        filepath: Path to lmiss file
-    
-    Returns:
-        DataFrame or None if not provided
-    """
-    if filepath is None:
-        return None
-    
-    logging.info(f"Reading lmiss file '{filepath}' ...")
-    df_lmiss = pd.read_csv(filepath, sep=r"\s+", skiprows=[1], low_memory=False)
-    logging.info(f"Reading lmiss file '{filepath}' ... done.")
-    return df_lmiss
-
-
-def load_frq(filepath):
-    """
-    Load PLINK frq file (allele frequency).
-    
-    Args:
-        filepath: Path to frq file
-    
-    Returns:
-        DataFrame or None if not provided
-    """
-    if filepath is None:
-        return None
-    
-    logging.info(f"Reading frq file '{filepath}' ...")
-    df_frq = pd.read_csv(filepath, sep=r"\s+")
-    logging.info(f"Reading frq file '{filepath}' ... done.")
-    return df_frq
-
-
-def load_eigenval(filepath):
-    """
-    Load PLINK eigenval file (eigenvalues).
-    
-    Args:
-        filepath: Path to eigenval file
-    
-    Returns:
-        DataFrame with eigenvalues, or None if not provided
-    """
-    if filepath is None:
-        return None
-    
-    logging.info(f"Reading eigenval file '{filepath}' ...")
-    eigenval = pd.read_csv(filepath, sep="\t", header=None, names=["eigenvalue"])
-    
-    logging.info(f"   Found {len(eigenval)} eigenvalues.")
-    
-    # Compute variance explained
-    eigenval["eigenvalue"] = eigenval["eigenvalue"] / eigenval["eigenvalue"].sum()
-    
-    # Add cumulative eigenvalues
-    eigenval["cumulative"] = eigenval["eigenvalue"].cumsum()
-    
-    # Add index starting from 1
-    eigenval["dimension"] = eigenval.index + 1
-    
-    # Reorder columns
-    eigenval = eigenval[["dimension"] + [col for col in eigenval.columns if col != "dimension"]]
-    
-    logging.info(f"Reading eigenval file '{filepath}' ... done.")
-    return eigenval
-
-
 def load_eigenvec(filepath, id_column=None):
     """
     Load PLINK eigenvec file (eigenvectors).
@@ -306,6 +215,9 @@ def merge_data(eigenvec, annotation, eigenvec_id_col='id', annotation_id_col=Non
         
         if invert_time and time_col is not None and time_col in df.columns:
             df[time_col] = -df[time_col]
+
+        ## filter for Politcal_Entit == 'Greece'
+        df = df[df['Political_Entit'] == 'Greece']
     else:
         df = eigenvec.copy()
     

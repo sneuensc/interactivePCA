@@ -181,6 +181,20 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, x
                 showlegend=legend
             ))
 
+    traces.append(scatter_trace(
+        x=[], y=[],
+        mode='markers',
+        marker=dict(
+            size=16,
+            color='rgba(0,0,0,0)',
+            symbol='circle-open',
+            line=dict(width=2.5, color='black')
+        ),
+        name='__hover_highlight__',
+        showlegend=False,
+        hovertemplate='<extra></extra>'
+    ))
+
     fig = go.Figure(traces)
     fig.update_layout(
         xaxis_title=x_col if xlab else '',
@@ -275,6 +289,15 @@ def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=
                 showlegend=legend
             ))
 
+    traces.append(go.Scatter3d(
+        x=[], y=[], z=[],
+        mode='markers',
+        marker=dict(size=10, color='rgba(0,0,0,0)', line=dict(width=3, color='black')),
+        name='__hover_highlight__',
+        showlegend=False,
+        hovertemplate='<extra></extra>'
+    ))
+
     fig = go.Figure(traces)
     fig.update_layout(
         scene=dict(
@@ -365,6 +388,15 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
                 text=group_df[group],
                 showlegend=legend,
             ))
+
+    traces.append(go.Scattermap(
+        lat=[], lon=[],
+        mode='markers',
+        marker=dict(size=20, color='black', opacity=0.4),
+        name='__hover_highlight__',
+        showlegend=False,
+        hovertemplate='<extra></extra>'
+    ))
 
     fig = go.Figure(traces)
     return fig

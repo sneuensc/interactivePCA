@@ -257,6 +257,31 @@ def create_app(args):
         prevent_initial_call='initial_duplicate'
     )
     
+    # Right-panel tab switching (Table / Details / Filter)
+    app.clientside_callback(
+        """
+        function(active_tab) {
+            var map = {
+                'tab-table':   'right-tab-table-content',
+                'tab-details': 'right-tab-details-content',
+                'tab-filter':  'right-tab-filter-content'
+            };
+            Object.keys(map).forEach(function(tab) {
+                var el = document.getElementById(map[tab]);
+                if (!el) return;
+                var isActive = (tab === active_tab);
+                el.style.display = isActive
+                    ? (tab === 'tab-table' ? 'flex' : 'block')
+                    : 'none';
+            });
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('right-panel-tabs-dummy', 'data'),
+        Input('right-panel-tabs', 'value'),
+        prevent_initial_call='initial_duplicate'
+    )
+
     # Register hover update callbacks (factory pattern)
     register_hover_update_callbacks(
         app,
@@ -265,6 +290,7 @@ def create_app(args):
         annotation_desc,
         show_map_plot=show_map_plot,
         show_time_plot=show_time_plot,
+        show_annotation_table=show_annotation_table,
     )
     
     # Register all application callbacks
