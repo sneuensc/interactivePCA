@@ -722,10 +722,11 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             placeholder='Enter pandas query (e.g. Age > 1000 & Country == "Peru")',
             style={
                 'width': '100%',
-                'height': f'{LAYOUT_CONFIG["query_field_height"]}px',
+                'flex': '1 1 0',
+                'minHeight': '0',
                 'fontFamily': 'monospace',
-                'fontSize': '12px',
-                'resize': 'vertical'
+                'resize': 'none',
+                'boxSizing': 'border-box'
             }
         )
     
@@ -761,7 +762,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 html.Div(
                     id='hover-details-content',
                     children='Hover over a point to see details.',
-                    style={'padding': '10px', 'fontSize': '13px', 'color': '#555'}
+                    style={'padding': '10px', 'color': '#555'}
                 ),
                 id='right-tab-details-content',
                 style={'flex': '1 1 0', 'minHeight': '0', 'overflow': 'auto', 'display': 'none'}
@@ -769,14 +770,15 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             # Filter tab
             html.Div([
                 html.Div('Filter query (pandas syntax):',
-                         style={'fontWeight': 'bold', 'fontSize': '13px',
-                                'padding': '8px 5px 5px 5px'}),
+                         style={'fontWeight': 'bold',
+                                'padding': '8px 5px 5px 5px', 'flex': '0 0 auto'}),
                 query_field,
                 html.Div(id='pca-filter-error-message',
-                         style={'color': 'red', 'fontSize': '12px',
-                                'padding': '0 5px', 'marginTop': '5px'})
+                         style={'color': 'red',
+                                'padding': '0 5px', 'marginTop': '5px', 'flex': '0 0 auto'})
             ], id='right-tab-filter-content',
-               style={'flex': '1 1 0', 'overflow': 'auto', 'display': 'none', 'padding': '5px'}),
+               style={'flex': '1 1 0', 'minHeight': '0', 'display': 'none',
+                      'flexDirection': 'column', 'padding': '5px', 'overflow': 'hidden'}),
         ], style={**flex_style, 'display': 'flex', 'flexDirection': 'column', 'minHeight': '0', 'overflow': 'hidden'})
 
     map_section = None
@@ -963,13 +965,15 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
         row['Selected'] = True
     
     # Define columns for the table (checkbox column instead of row selection)
+    # Narrow columns use a fixed width + suppressSizeToFit so they never shrink
+    # below their content; Description absorbs all remaining space via flex.
     column_defs = [
         create_checkbox_column_def(),
-        create_standard_column_def('Abbreviation', 'Abbreviation', minWidth=100),
+        create_standard_column_def('Abbreviation', 'Abbreviation', width=130, suppressSizeToFit=True),
         create_standard_column_def('Description', 'Description', flex=1, minWidth=200),
-        create_standard_column_def('Type', 'Type', minWidth=80),
-        create_standard_column_def('N_levels', 'N_levels', minWidth=80),
-        create_standard_column_def('Dropdown', 'Dropdown', minWidth=80)
+        create_standard_column_def('Type', 'Type', width=120, suppressSizeToFit=True),
+        create_standard_column_def('N_levels', 'N_levels', width=100, suppressSizeToFit=True),
+        create_standard_column_def('Dropdown', 'Dropdown', width=100, suppressSizeToFit=True),
     ]
     
     return html.Div([
@@ -990,10 +994,6 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
                 'animateRows': False,
                 'suppressRowClickSelection': True,
                 'suppressColumnVirtualisation': True,
-                'autoSizeStrategy': {
-                    'type': 'fitCellContents',
-                    'skipHeader': False
-                }
             },
             style={'flex': '1', 'width': '100%'}
         )

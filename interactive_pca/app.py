@@ -271,7 +271,7 @@ def create_app(args):
                 if (!el) return;
                 var isActive = (tab === active_tab);
                 el.style.display = isActive
-                    ? (tab === 'tab-table' ? 'flex' : 'block')
+                    ? (tab === 'tab-filter' ? 'flex' : tab === 'tab-table' ? 'flex' : 'block')
                     : 'none';
             });
             return window.dash_clientside.no_update;

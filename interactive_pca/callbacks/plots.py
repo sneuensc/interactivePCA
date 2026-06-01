@@ -33,6 +33,19 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         annotation_desc: Annotation description DataFrame
     """
     
+    # Auto-check Show Legend when switching to a multi-value or continuous group
+    @app.callback(
+        Output('pca-legend-toggle', 'value'),
+        Input('dropdown-group', 'value'),
+        prevent_initial_call=True
+    )
+    def auto_set_legend(group):
+        if group == 'none' or group not in df.columns:
+            return []
+        if df[group].dtype.kind in 'fi':          # continuous variable
+            return ['show_legend']
+        return ['show_legend'] if df[group].nunique() > 1 else []
+
     # Callback to show/hide Z-axis dropdown based on 3D toggle
     @app.callback(
         Output('z-axis-container', 'style'),
@@ -44,7 +57,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         hidden_style = {'display': 'none', 'alignItems': 'center', 'marginRight': '12px'}
         return display_style if 'enable_3d' in is_3d else hidden_style
     
-    # Callback for PCA plot regeneration (only when axes, grouping, or 3D toggle changes)
+    # Callback for PCA plot regeneration
     @app.callback(
         Output('pca-plot', 'figure'),
         Output('trace-map', 'data'),
@@ -53,16 +66,17 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         Input('dropdown-pc-z', 'value'),
         Input('dropdown-group', 'value'),
         Input('pca-3d-toggle', 'value'),
-        State('marker-aesthetics-store', 'data'),
-        State('pca-legend-toggle', 'value'),
-        State('hover-detailed', 'data'),
+        Input('marker-aesthetics-store', 'data'),
+        Input('pca-legend-toggle', 'value'),   # promoted from State so auto_set_legend is seen immediately
+        State('effective-hover-detailed', 'data'),
         State('selected-annotation-columns', 'data'),
         State('selection-store', 'data'),
         prevent_initial_call=False
     )
     def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, legend_toggle, hover_detailed, selected_cols, selected_ids):
-        """Regenerate PCA figure only when structure changes (axes, grouping, 3D mode)."""
+        """Regenerate PCA figure when any structural or aesthetic parameter changes."""
         import json
+        from dash import callback_context
         
         # Get current aesthetics
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
@@ -131,10 +145,17 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 legend_title=group
             )
         
+        # uirevision: changing this clears Plotly UI state (zoom, lasso selection).
+        # Key on structural parameters only — NOT aesthetics — so that the lasso
+        # selection and zoom are preserved when the user edits colours/sizes.
+        mode_str = '3d' if 'enable_3d' in is_3d else '2d'
+        uirev = f'{pc_x}-{pc_y}-{pc_z}-{group}-{mode_str}'
+
         # Update layout
         if 'enable_3d' not in is_3d:
             fig.update_layout(
                 autosize=True,
+                uirevision=uirev,
                 margin=dict(l=50, r=140 if (is_categorical and show_legend) else 20, t=40, b=40),
                 legend=dict(
                     visible=show_legend,
@@ -154,6 +175,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         else:
             fig.update_layout(
                 autosize=True,
+                uirevision=uirev,
                 legend=dict(
                     visible=show_legend,
                     x=1.02 if is_categorical else 0.02,
@@ -177,59 +199,30 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
         fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
         
-        # Preserve selection when regenerating figure
-        if selected_ids:
-            # Convert all IDs to strings for consistent comparison
+        # Determine what triggered this callback.
+        # For aesthetics/legend-only changes the structural layout is unchanged,
+        # so uirevision will preserve the client-side lasso selection — we must
+        # NOT override selectedpoints here or Plotly will fire plotly_deselect
+        # and wipe the selection.  Only set selectedpoints when the axes, group,
+        # or 3D mode changed (i.e. a structural change that resets the view).
+        structural_inputs = {
+            'dropdown-pc-x', 'dropdown-pc-y', 'dropdown-pc-z',
+            'dropdown-group', 'pca-3d-toggle'
+        }
+        triggered_ids = {t['prop_id'].split('.')[0]
+                         for t in callback_context.triggered}
+        structure_changed = bool(triggered_ids & structural_inputs)
+
+        if structure_changed and selected_ids:
             selected_set = set(str(sid) for sid in selected_ids)
             for trace in fig_dict.get('data', []):
                 customdata = trace.get('customdata', [])
                 if len(customdata) > 0 and selected_set:
-                    # Convert customdata to strings and use NumPy for faster lookup
                     customdata_str = np.array([str(cd) for cd in customdata])
                     mask = np.isin(customdata_str, list(selected_set))
                     trace['selectedpoints'] = np.where(mask)[0].tolist()
-        
-        return fig_dict, trace_map
-    
-    @app.callback(
-        Output('pca-plot', 'figure', allow_duplicate=True),
-        Input('pca-legend-toggle', 'value'),
-        State('pca-plot', 'figure'),
-        prevent_initial_call=True
-    )
-    def update_pca_legend_visibility(show_legend, current_fig):
-        """Fast update of legend visibility without regenerating figure."""
-        if current_fig is None:
-            return current_fig
-        
-        show_legend_flag = 'show_legend' in show_legend
-        
-        # Get margin from current layout or default
-        try:
-            legend_title = current_fig.get('layout', {}).get('legend', {}).get('title')
-            if isinstance(legend_title, dict):
-                legend_title = legend_title.get('text')
-            is_categorical = legend_title not in (None, 'none', '')
-        except Exception:
-            is_categorical = False
-        
-        # Adjust right margin based on legend visibility
-        r_margin = 140 if is_categorical and show_legend_flag else 20
-        
-        if 'layout' not in current_fig:
-            current_fig['layout'] = {}
-        if 'legend' not in current_fig['layout']:
-            current_fig['layout']['legend'] = {}
-        if 'margin' not in current_fig['layout']:
-            current_fig['layout']['margin'] = {}
-        current_fig['layout']['legend']['visible'] = show_legend_flag
-        current_fig['layout']['margin']['r'] = r_margin
 
-        if is_categorical:
-            for trace in current_fig.get('data', []):
-                trace['showlegend'] = show_legend_flag
-        
-        return current_fig
+        return fig_dict, trace_map
     
     if show_map_plot:
         @app.callback(
@@ -288,13 +281,13 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('dropdown-group', 'value'),
             Input('time-viz-mode', 'value'),
             Input('time-variable', 'value'),
-            Input('pca-plot', 'selectedData'),
+            Input('selection-store', 'data'),
             Input('marker-aesthetics-store', 'data'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             prevent_initial_call=False
         )
-        def update_time_histogram(group, viz_mode, time_variable, selected_data, aesthetics_store, hover_detailed, selected_cols):
+        def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store, hover_detailed, selected_cols):
             if time_variable is None or time_variable not in df.columns:
                 return {}
 
@@ -305,17 +298,19 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             # Get IDs corresponding to the time values
             time_ids = df.loc[time_vals.index, 'id'].tolist()
 
-            # Get selected IDs if any
-            selected_ids = []
-            if selected_data and 'points' in selected_data:
-                selected_ids = [point.get('customdata', [point.get('pointIndex')])[0] 
-                              if point.get('customdata') else point.get('pointIndex') 
-                              for point in selected_data['points']]
+            # Selected IDs come from the app-level selection store
+            # (holds all IDs by default, a subset after a lasso selection)
+            selected_ids = selection_store or []
 
             fig = go.Figure()
 
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
-            default_color = aesthetics['color'].get('default', 'steelblue')
+            default_color   = aesthetics['color'].get('default', 'steelblue')
+            unsel_color     = aesthetics['color'].get('unselected', '#cccccc')
+            unsel_opacity   = aesthetics['opacity'].get('unselected', 0.3)
+            unsel_size_base = aesthetics['size'].get('default', 8)
+            unsel_size      = aesthetics['size'].get('unselected', unsel_size_base)
+            _unsel_marker   = dict(marker=dict(color=unsel_color, opacity=unsel_opacity, size=unsel_size))
 
             if viz_mode == 'distribution':
                 # Simple histogram
@@ -356,6 +351,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                                 symbol=aesthetics['symbol'].get('default', 'circle'),
                                 showscale=False
                             ),
+                            unselected=_unsel_marker,
                             customdata=time_ids,
                             hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
                             name='All samples',
@@ -381,6 +377,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                                     opacity=opacity_map.get(str(val), default_opacity),
                                     symbol=symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle'))
                                 ),
+                                unselected=_unsel_marker,
                                 customdata=subset_ids,
                                 hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
                                 name=str(val),
@@ -392,6 +389,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         y=jitter,
                         mode='markers',
                         marker=dict(color=default_color, size=default_size, opacity=default_opacity),
+                        unselected=_unsel_marker,
                         customdata=time_ids,
                         hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
                         name='All samples',

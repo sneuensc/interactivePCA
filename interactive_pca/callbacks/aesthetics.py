@@ -412,6 +412,25 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             )
     
     
+    # When the group changes, pre-populate the store for that group so all
+    # plot callbacks receive the SAME colour assignment (they all read from
+    # marker-aesthetics-store as an Input, so they wait for this to finish).
+    @app.callback(
+        Output('marker-aesthetics-store', 'data', allow_duplicate=True),
+        Input('dropdown-group', 'value'),
+        State('marker-aesthetics-store', 'data'),
+        prevent_initial_call=True
+    )
+    def ensure_group_in_store(group, aesthetics_store):
+        if not group or aesthetics_store is None:
+            return dash.no_update
+        if group not in aesthetics_store:
+            new_aest = get_aesthetics_for_group(args, group, df, aesthetics_store)
+            updated = dict(aesthetics_store)
+            updated[group] = new_aest
+            return updated
+        return dash.no_update
+
     # Callback to save aesthetics when Save button is clicked
     @app.callback(
         Output('marker-aesthetics-store', 'data'),

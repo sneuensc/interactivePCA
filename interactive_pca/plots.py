@@ -15,6 +15,24 @@ from .utils import dict_of_dicts_to_tuple, tuple_to_dict_of_dicts
 _df = None
 
 
+def _to_rgba(color: str, opacity: float) -> str:
+    """Return an rgba() string that encodes *opacity* into *color*.
+
+    Handles #rrggbb, #rgb, and named CSS colours that happen to be hex-safe.
+    Falls back to the original colour string on parse failure.
+    """
+    try:
+        c = color.strip().lstrip('#')
+        if len(c) == 3:
+            c = c[0]*2 + c[1]*2 + c[2]*2
+        if len(c) == 6:
+            r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+            return f'rgba({r},{g},{b},{opacity})'
+    except (ValueError, AttributeError):
+        pass
+    return color
+
+
 def set_dataframe(df):
     """
     Set the global DataFrame for plotting functions.
@@ -80,11 +98,15 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
 
     # Unselected case
     if unselected:
-        marker = dict(
-            size=point_size['unselected'],
-            color=point_color['unselected'] if not mapplot else point_color.get('default'),
-            opacity=point_opacity['unselected']
-        )
+        unsel_color   = point_color.get('unselected', point_color.get('default', '#cccccc'))
+        unsel_opacity = point_opacity.get('unselected', point_opacity.get('default', 0.3))
+        unsel_size    = point_size.get('unselected', point_size.get('default', 6))
+        if mapplot:
+            # Scattermap ignores unselected.marker.opacity — bake opacity into
+            # the colour as an RGBA string so it is always respected.
+            marker = dict(size=unsel_size, color=_to_rgba(unsel_color, unsel_opacity))
+        else:
+            marker = dict(size=unsel_size, color=unsel_color, opacity=unsel_opacity)
     # Continuous color scale
     elif continuous:
         # Use provided subset or global df
@@ -399,6 +421,20 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
     ))
 
     fig = go.Figure(traces)
+
+    # Auto-zoom/center to data bounds
+    import math as _math
+    lats = df_map[lat_col].dropna()
+    lons = df_map[lon_col].dropna()
+    if not lats.empty:
+        center_lat = float(lats.mean())
+        center_lon = float(lons.mean())
+        lat_range = max(float(lats.max() - lats.min()), 0.01)
+        lon_range = max(float(lons.max() - lons.min()), 0.01)
+        max_range = max(lat_range, lon_range)
+        zoom = max(1, min(13, _math.floor(_math.log2(360 / max_range)) - 1))
+        fig.update_layout(map=dict(center=dict(lat=center_lat, lon=center_lon), zoom=zoom))
+
     return fig
 
 # Alias for backward compatibility

@@ -207,21 +207,7 @@ def register_hover_update_callbacks(app, args, df, annotation_desc,
                 current_fig, df, annotation_desc, group,
                 effective_detailed, selected_cols, group_colors, pt)
 
-        # triggered by group change
-        @app.callback(
-            Output(plot_id, 'figure', allow_duplicate=True),
-            Input('dropdown-group', 'value'),
-            State(plot_id, 'figure'),
-            State('effective-hover-detailed', 'data'),
-            State('selected-annotation-columns', 'data'),
-            State('marker-aesthetics-store', 'data'),
-            prevent_initial_call=True
-        )
-        def update_hover_group(group, current_fig, effective_detailed, selected_cols,
-                               aesthetics_store, pt=plot_type):
-            from ..components import get_aesthetics_for_group
-            aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
-            group_colors = aesthetics.get('color', {}) if aesthetics else {}
-            return update_figure_hover_templates(
-                current_fig, df, annotation_desc, group,
-                effective_detailed, selected_cols, group_colors, pt)
+        # NOTE: no separate update_hover_group callback.
+        # update_pca_plot_structure / update_map_plot / update_time_histogram all call
+        # update_figure_hover_templates internally when the group changes, so a
+        # dedicated callback here would race against them and restore the old figure.
