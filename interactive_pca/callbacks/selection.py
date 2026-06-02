@@ -77,7 +77,41 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         
         logging.info(f"Saved {len(selected_ids)} selected IDs to {output_file}")
     
-    if show_map_plot:
+    def _apply_all_selected(fig):
+        """Set selectedpoints to all indices on every trace that has customdata."""
+        if not fig:
+            return fig
+        all_ids = df['id'].tolist()
+        selected_set = set(str(sid) for sid in all_ids)
+        for trace in fig.get('data', []):
+            customdata = trace.get('customdata', [])
+            if len(customdata) > 0:
+                customdata_str = np.array([str(cd) for cd in customdata])
+                mask = np.isin(customdata_str, list(selected_set))
+                trace['selectedpoints'] = np.where(mask)[0].tolist()
+            else:
+                trace.pop('selectedpoints', None)
+        return fig
+
+    if show_map_plot and show_time_plot:
+        @app.callback(
+            Output('selection-store', 'data', allow_duplicate=True),
+            Output('pca-plot', 'figure', allow_duplicate=True),
+            Output('pca-map-plot', 'figure', allow_duplicate=True),
+            Output('time-histogram', 'figure', allow_duplicate=True),
+            Input('select-all-button', 'n_clicks'),
+            State('pca-plot', 'figure'),
+            State('pca-map-plot', 'figure'),
+            State('time-histogram', 'figure'),
+            prevent_initial_call=True
+        )
+        def select_all_samples(n_clicks, pca_fig, map_fig, time_fig):
+            if not n_clicks:
+                raise dash.exceptions.PreventUpdate
+            all_ids = df['id'].tolist()
+            return all_ids, _apply_all_selected(pca_fig), _apply_all_selected(map_fig), _apply_all_selected(time_fig)
+
+    elif show_map_plot:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
             Output('pca-plot', 'figure', allow_duplicate=True),
@@ -88,30 +122,27 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             prevent_initial_call=True
         )
         def select_all_samples(n_clicks, pca_fig, map_fig):
-            """Select all samples."""
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
-
             all_ids = df['id'].tolist()
-            selected_set = set(str(sid) for sid in all_ids)
+            return all_ids, _apply_all_selected(pca_fig), _apply_all_selected(map_fig)
 
-            if pca_fig:
-                for trace in pca_fig.get('data', []):
-                    customdata = trace.get('customdata', [])
-                    if len(customdata) > 0:
-                        customdata_str = np.array([str(cd) for cd in customdata])
-                        mask = np.isin(customdata_str, list(selected_set))
-                        trace['selectedpoints'] = np.where(mask)[0].tolist()
+    elif show_time_plot:
+        @app.callback(
+            Output('selection-store', 'data', allow_duplicate=True),
+            Output('pca-plot', 'figure', allow_duplicate=True),
+            Output('time-histogram', 'figure', allow_duplicate=True),
+            Input('select-all-button', 'n_clicks'),
+            State('pca-plot', 'figure'),
+            State('time-histogram', 'figure'),
+            prevent_initial_call=True
+        )
+        def select_all_samples(n_clicks, pca_fig, time_fig):
+            if not n_clicks:
+                raise dash.exceptions.PreventUpdate
+            all_ids = df['id'].tolist()
+            return all_ids, _apply_all_selected(pca_fig), _apply_all_selected(time_fig)
 
-            if map_fig:
-                for trace in map_fig.get('data', []):
-                    customdata = trace.get('customdata', [])
-                    if len(customdata) > 0:
-                        customdata_str = np.array([str(cd) for cd in customdata])
-                        mask = np.isin(customdata_str, list(selected_set))
-                        trace['selectedpoints'] = np.where(mask)[0].tolist()
-
-            return all_ids, pca_fig, map_fig
     else:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
@@ -121,22 +152,10 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             prevent_initial_call=True
         )
         def select_all_samples(n_clicks, pca_fig):
-            """Select all samples."""
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
-
             all_ids = df['id'].tolist()
-            selected_set = set(str(sid) for sid in all_ids)
-
-            if pca_fig:
-                for trace in pca_fig.get('data', []):
-                    customdata = trace.get('customdata', [])
-                    if len(customdata) > 0:
-                        customdata_str = np.array([str(cd) for cd in customdata])
-                        mask = np.isin(customdata_str, list(selected_set))
-                        trace['selectedpoints'] = np.where(mask)[0].tolist()
-
-            return all_ids, pca_fig
+            return all_ids, _apply_all_selected(pca_fig)
     
     if show_annotation_table:
         @app.callback(
@@ -255,14 +274,17 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         prevent_initial_call=True
     )
     def pca_plot_to_selection_store(selected_data):
-        """Convert clicked/lasso points on PCA plot to IDs."""
+        """Convert lasso/box selection on PCA plot to IDs.
+
+        Returns no_update when selectedData is null/empty so that programmatic
+        figure updates (group change, aesthetics change) that reset selectedData
+        do NOT clear the active selection.  Use the 'Select all' button to reset.
+        """
         if not selected_data or 'points' not in selected_data or not selected_data['points']:
-            return []
-        
-        # Extract IDs from customdata and convert to strings
+            return dash.no_update
         selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
         selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
-        return sorted(list(set(selected_ids)))
+        return sorted(list(set(selected_ids))) if selected_ids else dash.no_update
     
     if show_map_plot:
         @app.callback(
@@ -271,13 +293,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             prevent_initial_call=True
         )
         def map_plot_to_selection_store(selected_data):
-            """Convert clicked/lasso points on map to IDs."""
+            """Convert lasso/box selection on map to IDs. Returns no_update on empty."""
             if not selected_data or 'points' not in selected_data or not selected_data['points']:
-                return []
-
+                return dash.no_update
             selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
             selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
-            return sorted(list(set(selected_ids)))
+            return sorted(list(set(selected_ids))) if selected_ids else dash.no_update
     
     if show_time_plot:
         @app.callback(
@@ -286,14 +307,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             prevent_initial_call=True
         )
         def time_plot_to_selection_store(selected_data):
-            """Convert selected points in time scatter to IDs."""
+            """Convert lasso/box selection on time plot to IDs. Returns no_update on empty."""
             if not selected_data or 'points' not in selected_data or not selected_data['points']:
-                return []
-            
-            # Extract IDs from customdata and convert to strings
+                return dash.no_update
             selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
             selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
-            return sorted(list(set(selected_ids)))
+            return sorted(list(set(selected_ids))) if selected_ids else dash.no_update
     
     # === Selection store to plot callbacks ===
     
@@ -307,19 +326,20 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         """Update PCA plot to highlight selected rows."""
         if current_fig is None:
             return {}
-        
-        # Mark selected points in all traces using customdata (IDs)
-        selected_set = set(str(sid) for sid in selected_ids) if selected_ids else set()
-        
+        if not selected_ids:
+            # No selection — remove selectedpoints so Plotly shows all points normally
+            for trace in current_fig.get('data', []):
+                trace.pop('selectedpoints', None)
+            return current_fig
+        selected_set = set(str(sid) for sid in selected_ids)
         for trace in current_fig.get('data', []):
             customdata = trace.get('customdata', [])
-            if len(customdata) > 0 and selected_set:
+            if len(customdata) > 0:
                 customdata_str = np.array([str(cd) for cd in customdata])
                 mask = np.isin(customdata_str, list(selected_set))
                 trace['selectedpoints'] = np.where(mask)[0].tolist()
             else:
-                trace['selectedpoints'] = []
-        
+                trace.pop('selectedpoints', None)
         return current_fig
     
     if show_map_plot:
@@ -333,42 +353,22 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             """Update map plot to highlight selected rows."""
             if current_fig is None:
                 return {}
-
-            selected_set = set(str(sid) for sid in selected_ids) if selected_ids else set()
-
+            if not selected_ids:
+                for trace in current_fig.get('data', []):
+                    trace.pop('selectedpoints', None)
+                return current_fig
+            selected_set = set(str(sid) for sid in selected_ids)
             for trace in current_fig.get('data', []):
                 customdata = trace.get('customdata', [])
-                if len(customdata) > 0 and selected_set:
+                if len(customdata) > 0:
                     customdata_str = np.array([str(cd) for cd in customdata])
                     mask = np.isin(customdata_str, list(selected_set))
                     trace['selectedpoints'] = np.where(mask)[0].tolist()
                 else:
-                    trace['selectedpoints'] = []
-
+                    trace.pop('selectedpoints', None)
             return current_fig
     
-    if show_time_plot:
-        @app.callback(
-            Output('time-histogram', 'figure', allow_duplicate=True),
-            Input('selection-store', 'data'),
-            State('time-histogram', 'figure'),
-            prevent_initial_call=True
-        )
-        def update_time_selection(selected_ids, current_fig):
-            """Update time histogram to highlight selected rows."""
-            if current_fig is None:
-                return {}
-            
-            # Mark selected points in all traces using customdata (IDs)
-            selected_set = set(str(sid) for sid in selected_ids) if selected_ids else set()
-            
-            for trace in current_fig.get('data', []):
-                customdata = trace.get('customdata', [])
-                if len(customdata) > 0 and selected_set:
-                    customdata_str = np.array([str(cd) for cd in customdata])
-                    mask = np.isin(customdata_str, list(selected_set))
-                    trace['selectedpoints'] = np.where(mask)[0].tolist()
-                else:
-                    trace['selectedpoints'] = []
-            
-            return current_fig
+    # NOTE: update_time_selection is intentionally absent.
+    # update_time_histogram (plots.py) already has selection-store as an Input
+    # and applies selectedpoints internally, so a separate patching callback
+    # would race against it and produce incorrect results.

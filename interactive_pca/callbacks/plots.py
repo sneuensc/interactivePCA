@@ -146,10 +146,12 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             )
         
         # uirevision: changing this clears Plotly UI state (zoom, lasso selection).
-        # Key on structural parameters only — NOT aesthetics — so that the lasso
-        # selection and zoom are preserved when the user edits colours/sizes.
+        # Deliberately excludes group so that changing the grouping variable does
+        # not fire plotly_deselect and wipe the active selection from selection-store.
+        # The correct selectedpoints are reapplied server-side by this callback when
+        # structure_changed is True, so highlights remain correct regardless.
         mode_str = '3d' if 'enable_3d' in is_3d else '2d'
-        uirev = f'{pc_x}-{pc_y}-{pc_z}-{group}-{mode_str}'
+        uirev = f'{pc_x}-{pc_y}-{pc_z}-{mode_str}'
 
         # Update layout
         if 'enable_3d' not in is_3d:
@@ -230,9 +232,10 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('dropdown-group', 'value'),
             Input('marker-aesthetics-store', 'data'),
             State('hover-detailed', 'data'),
-            State('selected-annotation-columns', 'data')
+            State('selected-annotation-columns', 'data'),
+            State('selection-store', 'data'),
         )
-        def update_map_plot(group, aesthetics_store, hover_detailed, selected_cols):
+        def update_map_plot(group, aesthetics_store, hover_detailed, selected_cols, selection_store):
             if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
                 return {}
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
@@ -269,6 +272,16 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             fig_dict = fig.to_dict()
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
             fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map')
+
+            # Reapply selection so it survives group/aesthetics changes
+            if selection_store:
+                selected_set = set(str(sid) for sid in selection_store)
+                for trace in fig_dict.get('data', []):
+                    customdata = trace.get('customdata', [])
+                    if len(customdata) > 0:
+                        customdata_str = np.array([str(cd) for cd in customdata])
+                        mask = np.isin(customdata_str, list(selected_set))
+                        trace['selectedpoints'] = np.where(mask)[0].tolist()
 
             return fig_dict
 
@@ -467,5 +480,22 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             fig_dict = fig.to_dict()
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
             fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time')
+
+            # Apply selectedpoints for scatter mode (histogram bins don't support it).
+            # Done here rather than in a separate callback to avoid a race condition
+            # since update_time_histogram already re-renders on selection-store changes.
+            if viz_mode == 'scatter':
+                if selection_store:
+                    selected_set = set(str(s) for s in selection_store)
+                    for trace in fig_dict.get('data', []):
+                        cd = trace.get('customdata', [])
+                        if cd:
+                            mask = np.isin(np.array([str(c) for c in cd]), list(selected_set))
+                            trace['selectedpoints'] = np.where(mask)[0].tolist()
+                        else:
+                            trace.pop('selectedpoints', None)
+                else:
+                    for trace in fig_dict.get('data', []):
+                        trace.pop('selectedpoints', None)
 
             return fig_dict
