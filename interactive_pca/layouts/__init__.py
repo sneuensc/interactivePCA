@@ -238,6 +238,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='hover-detailed', data=False),  # Toggle for detailed hover information
         dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
         dcc.Store(id='hover-sync-dummy', data=None),  # Dummy output for hover-sync clientside callback
+        dcc.Store(id='hidden-groups-store', data={}),  # Group values hidden via legend click
         dcc.Store(id='right-panel-tabs-dummy', data=None),  # Dummy output for right-panel tab switching
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         dcc.Download(id='download-snapshot'),

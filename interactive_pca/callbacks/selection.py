@@ -27,11 +27,29 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
     
     @app.callback(
         Output('selection-counter', 'children'),
-        Input('selection-store', 'data')
+        Input('selection-store', 'data'),
+        Input('hidden-groups-store', 'data'),
+        State('dropdown-group', 'value'),
     )
-    def update_selection_counter(selected_indexes):
-        """Display count of selected samples."""
-        return f"Selected: {len(selected_indexes) if selected_indexes else 0} / {len(df)}"
+    def update_selection_counter(selected_indexes, hidden_store, group):
+        """Display count of selected / hidden samples.
+
+        A point is either selected, hidden, or unselected — never two at once
+        in the message.  Hidden points are excluded from the selected count.
+        """
+        n_total = len(df)
+        sel_ids = set(str(sid) for sid in (selected_indexes or []))
+
+        is_cat = group and group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi'
+        hidden_set = set(str(g) for g in (hidden_store or {}).get(group or '', [])) if is_cat else set()
+
+        if hidden_set:
+            n_hidden = int(df[group].astype(str).isin(hidden_set).sum())
+            id_to_group = df.set_index('id')[group].astype(str).to_dict()
+            n_selected = sum(1 for sid in sel_ids if id_to_group.get(sid, '') not in hidden_set)
+            return f"Selected: {n_selected} / {n_total}  ({n_hidden} hidden)"
+
+        return f"Selected: {len(sel_ids)} / {n_total}"
     
     @app.callback(
         Output('hover-detailed', 'data'),
@@ -168,11 +186,9 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             """Filter samples based on pandas query and update selection."""
             if not query_string or query_string.strip() == '':
                 return df['id'].tolist(), ""
-
             try:
                 filtered_df = df.query(query_string)
-                selected_ids = filtered_df['id'].tolist()
-                return selected_ids, ""
+                return filtered_df['id'].tolist(), ""
             except Exception as e:
                 return dash.no_update, f"Query error: {str(e)}"
     
@@ -188,32 +204,73 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
     
     if show_annotation_table:
         @app.callback(
+            Output('pca-annotation-table', 'filterModel'),
+            Input('status-filter-radio', 'value'),
+        )
+        def filter_table_by_status(filter_value):
+            """Apply a Status filter to the annotation table via the radio buttons."""
+            if not filter_value or filter_value == 'all':
+                return {}
+            return {'Status': {'filterType': 'text', 'type': 'equals', 'filter': filter_value}}
+
+    if show_annotation_table:
+        @app.callback(
             Output('pca-annotation-table', 'rowData'),
             Output('pca-annotation-table', 'columnDefs'),
             Input('selected-annotation-columns', 'data'),
+            Input('hidden-groups-store', 'data'),
+            Input('dropdown-group', 'value'),
             State('selection-store', 'data'),
             prevent_initial_call=False
         )
-        def update_pca_annotation_table(selected_columns, selected_ids):
+        def update_pca_annotation_table(selected_columns, hidden_store, group, selected_ids):
             """Update annotation table columns and selection state."""
-            from ..components import create_checkbox_column_def, create_standard_column_def
+            from ..components import create_standard_column_def
 
-            if not selected_columns:
-                cols = []
-            else:
-                cols = [col for col in selected_columns if col in df.columns]
-
+            cols = [col for col in (selected_columns or []) if col in df.columns]
             if not cols:
                 cols = ['id']
             if 'id' not in cols:
                 cols = ['id'] + cols
+
             row_data = df[cols].to_dict('records')
+
             selected_set = set(str(sid) for sid in (selected_ids or []))
+            hidden_set = set()
+            id_to_group = {}
+            is_categorical = group and group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi'
+            if hidden_store and is_categorical:
+                hidden_set = set(str(g) for g in hidden_store.get(group, []))
+            if is_categorical:
+                id_to_group = df.set_index('id')[group].astype(str).to_dict()
+
             for row in row_data:
-                row['Selected'] = str(row.get('id')) in selected_set
+                row_id = str(row.get('id', ''))
+                gval = id_to_group.get(row_id, '')
+                row['_group_val'] = gval
+                if hidden_set and gval in hidden_set:
+                    row['Status'] = 'hidden'
+                elif row_id in selected_set:
+                    row['Status'] = 'selected'
+                else:
+                    row['Status'] = 'unselected'
+
+            status_col = {
+                'field': 'Status',
+                'headerName': 'Status',
+                'editable': True,
+                'width': 110,
+                'pinned': 'left',
+                'sortable': True,
+                'filter': True,
+                'singleClickEdit': True,
+                'cellEditor': 'agSelectCellEditor',
+                'cellEditorParams': {'values': ['selected', 'unselected', 'hidden']},
+            }
             column_defs = [
-                create_checkbox_column_def(),
-                create_standard_column_def('id', 'id', hide=True)
+                status_col,
+                create_standard_column_def('id', 'id', hide=True),
+                create_standard_column_def('_group_val', '_group_val', hide=True),
             ] + [
                 create_standard_column_def(col, col)
                 for col in cols
@@ -224,46 +281,97 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
     if show_annotation_table:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
-            Input('pca-annotation-table', 'cellValueChanged'),
-            State('selection-store', 'data'),
+            Input('pca-annotation-table', 'filterModel'),
+            State('pca-annotation-table', 'virtualRowData'),
             prevent_initial_call=True
         )
-        def table_to_selection_store(cell_change, selected_ids):
-            """Convert selected rows in table to IDs with circular update prevention."""
+        def sync_table_filter_to_selection(filter_model, virtual_row_data):
+            """Sync the table's column-filter result to selection-store and plots."""
+            if filter_model is None:
+                return dash.no_update
+            if not filter_model:
+                # All filters cleared — restore full selection
+                return df['id'].tolist()
+            if not virtual_row_data:
+                return []
+            return sorted([str(row['id']) for row in virtual_row_data if 'id' in row])
+
+    if show_annotation_table:
+        @app.callback(
+            Output('selection-store', 'data', allow_duplicate=True),
+            Output('hidden-groups-store', 'data', allow_duplicate=True),
+            Input('pca-annotation-table', 'cellValueChanged'),
+            State('selection-store', 'data'),
+            State('hidden-groups-store', 'data'),
+            State('dropdown-group', 'value'),
+            prevent_initial_call=True
+        )
+        def table_status_to_stores(cell_change, selected_ids, hidden_store, group):
+            """Apply Status dropdown change to selection-store and hidden-groups-store."""
             if not cell_change or 'data' not in cell_change:
-                return dash.no_update
+                return dash.no_update, dash.no_update
+            if cell_change.get('colId') != 'Status':
+                return dash.no_update, dash.no_update
+
             row = cell_change.get('data') or {}
-            row_id = row.get('id')
-            if row_id is None:
-                return dash.no_update
+            row_id = str(row.get('id', ''))
+            new_status = row.get('Status', '')
+            group_val = str(row.get('_group_val', ''))
 
-            current_selection = set(str(sid) for sid in (selected_ids or []))
-            new_selection = set(current_selection)
+            if not row_id or new_status not in ('selected', 'unselected', 'hidden'):
+                return dash.no_update, dash.no_update
 
-            if row.get('Selected'):
-                new_selection.add(str(row_id))
+            # ── selection-store ──────────────────────────────────────────────
+            current_sel = set(str(sid) for sid in (selected_ids or []))
+            new_sel = set(current_sel)
+            if new_status == 'selected':
+                new_sel.add(row_id)
             else:
-                new_selection.discard(str(row_id))
+                new_sel.discard(row_id)
+            sel_out = sorted(new_sel) if new_sel != current_sel else dash.no_update
 
-            if new_selection == current_selection:
-                return dash.no_update
+            # ── hidden-groups-store ──────────────────────────────────────────
+            is_categorical = group and group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi'
+            if not is_categorical or not group_val:
+                return sel_out, dash.no_update
 
-            return sorted(new_selection)
+            new_hidden = dict(hidden_store or {})
+            hidden_vals = set(str(g) for g in new_hidden.get(group, []))
+            if new_status == 'hidden':
+                hidden_vals.add(group_val)
+            else:
+                hidden_vals.discard(group_val)
+            new_hidden[group] = sorted(hidden_vals)
+            hidden_out = new_hidden if new_hidden.get(group) != (hidden_store or {}).get(group) else dash.no_update
+
+            return sel_out, hidden_out
     
     if show_annotation_table:
         @app.callback(
             Output('pca-annotation-table', 'rowData', allow_duplicate=True),
             Input('selection-store', 'data'),
             State('pca-annotation-table', 'rowData'),
+            State('hidden-groups-store', 'data'),
+            State('dropdown-group', 'value'),
             prevent_initial_call=True
         )
-        def update_table_selection(selected_ids, row_data):
-            """Update table checkbox state to reflect current selection."""
+        def update_table_selection(selected_ids, row_data, hidden_store, group):
+            """Update Status column to reflect current selection (from lasso/box selection)."""
             if not row_data:
                 return dash.no_update
             selected_set = set(str(sid) for sid in selected_ids)
+            hidden_set = set()
+            if hidden_store and group and group != 'none' and group in df.columns:
+                hidden_set = set(str(g) for g in hidden_store.get(group, []))
             for row in row_data:
-                row['Selected'] = str(row.get('id')) in selected_set
+                row_id = str(row.get('id', ''))
+                gval = str(row.get('_group_val', ''))
+                if hidden_set and gval in hidden_set:
+                    row['Status'] = 'hidden'
+                elif row_id in selected_set:
+                    row['Status'] = 'selected'
+                else:
+                    row['Status'] = 'unselected'
             return row_data
     
     # === Plot to selection store callbacks ===
