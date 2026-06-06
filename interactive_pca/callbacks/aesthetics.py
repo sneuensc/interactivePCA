@@ -299,15 +299,15 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     'Symbol': symbol_display
                 })
 
-            # Column definitions — Group carries the drag handle, Color uses
-            # the JS ColorPickerRenderer so it animates with the row on drag
+            # Group flexes to fill all remaining width; every other column is
+            # fixed to its content width so the table never wastes space.
             columnDefs = [
                 {
                     'field': 'Group',
                     'headerName': 'Group',
                     'editable': False,
-                    'width': 130,
-                    'pinned': 'left',
+                    'flex': 1,
+                    'minWidth': 80,
                     'rowDrag': {'function': '["default","unselected"].indexOf(params.data.Group) === -1'},
                 },
                 {
@@ -316,14 +316,14 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     'cellRenderer': 'ColorPickerRenderer',
                     'editable': False,
                     'width': 80,
-                    'pinned': 'left',
                     'suppressSizeToFit': True,
                 },
                 {
                     'field': 'Size',
                     'headerName': 'Size',
                     'editable': True,
-                    'width': 90,
+                    'width': 70,
+                    'suppressSizeToFit': True,
                     'singleClickEdit': True,
                     'cellEditor': 'agSelectCellEditor',
                     'cellEditorParams': {'values': ['-', '4', '6', '8', '10', '12', '14', '16', '18', '20', '22', '24', '26', '28', '30']}
@@ -332,7 +332,8 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     'field': 'Opacity',
                     'headerName': 'Opacity',
                     'editable': True,
-                    'width': 100,
+                    'width': 85,
+                    'suppressSizeToFit': True,
                     'singleClickEdit': True,
                     'cellEditor': 'agSelectCellEditor',
                     'cellEditorParams': {'values': ['-', '0.0', '0.2', '0.4', '0.6', '0.8', '1.0']}
@@ -342,7 +343,8 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     'headerName': 'Symbol',
                     'editable': True,
                     'type': 'text',
-                    'width': 150,
+                    'width': 130,
+                    'suppressSizeToFit': True,
                     'singleClickEdit': True,
                     'cellEditor': 'agSelectCellEditor',
                     'cellEditorParams': {'values': ['-', 'circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star']}
@@ -353,7 +355,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 id='aesthetics-edit-table',
                 rowData=rows,
                 columnDefs=columnDefs,
-                defaultColDef={'flex': 1, 'minWidth': 80, 'resizable': True},
+                defaultColDef={'resizable': True},
                 dashGridOptions={
                     'rowSelection': 'single',
                     'headerHeight': 40,

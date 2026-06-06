@@ -162,4 +162,18 @@ def get_aesthetics_for_group(args, group, df, store_data):
         return get_init_aesthetics(args, group, df)
     if group in store_data:
         return store_data[group]
-    return get_init_aesthetics(args, group, df)
+
+    # New group — generate fresh aesthetics then carry over default/unselected
+    # from the most recently visited group (last entry in the store).
+    new_aest = get_init_aesthetics(args, group, df)
+    ref = list(store_data.values())[-1]
+    for key in ('default', 'unselected'):
+        for prop in ('size', 'opacity', 'symbol', 'symbol_map'):
+            if key in ref.get(prop, {}):
+                new_aest[prop][key] = ref[prop][key]
+        # Carry over default/unselected hex colours (skip colorscale and
+        # per-group colour entries, which are always plain hex strings).
+        ref_color = ref.get('color', {})
+        if key in ref_color and isinstance(ref_color[key], str) and ref_color[key].startswith('#'):
+            new_aest['color'][key] = ref_color[key]
+    return new_aest
