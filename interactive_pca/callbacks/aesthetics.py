@@ -99,7 +99,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                         'width': 90,
                         'singleClickEdit': True,
                         'cellEditor': 'agSelectCellEditor',
-                        'cellEditorParams': {'values': [4, 6, 8, 10, 12, 14, 16, 18, 20]}
+                        'cellEditorParams': {'values': [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]}
                     },
                     {
                         'field': 'Opacity',
@@ -269,35 +269,55 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             default_size = aesthetics['size']['default']
             default_opacity = aesthetics['opacity']['default']
             default_symbol = aesthetics['symbol']['default']
-            
-            # Build table rows
+
+            # Determine display order: fixed rows first, then categoricals in aesthetics order
+            order_list = aesthetics.get('order', [])
+            all_keys = list(aesthetics['color'].keys())
+            fixed_keys = [k for k in ('default', 'unselected') if k in aesthetics['color']]
+            cat_keys = (
+                [k for k in order_list if k in aesthetics['color'] and k not in ('default', 'unselected')] +
+                [k for k in all_keys if k not in ('default', 'unselected') and k not in order_list]
+            )
+            ordered_keys = fixed_keys + cat_keys
+
+            # Build table rows (no Order column — row drag handles ordering)
             rows = []
-            
-            for key, color_val in aesthetics['color'].items():
+            for key in ordered_keys:
                 size_val = aesthetics['size'].get(key, default_size)
                 opacity_val = aesthetics['opacity'].get(key, default_opacity)
                 symbol_val = aesthetics['symbol'].get(key, default_symbol)
-                
-                # Show "-" if equals default (except for "default" row itself)
+
                 size_display = "-" if (size_val == default_size and key != 'default') else str(size_val)
                 opacity_display = "-" if (opacity_val == default_opacity and key != 'default') else str(opacity_val)
                 symbol_display = "-" if (symbol_val == default_symbol and key != 'default') else symbol_val
-                
+
                 rows.append({
                     'Group': key,
+                    'color': aesthetics['color'].get(key, '#cccccc'),
                     'Size': size_display,
                     'Opacity': opacity_display,
                     'Symbol': symbol_display
                 })
-            
-            # Column definitions
+
+            # Column definitions — Group carries the drag handle, Color uses
+            # the JS ColorPickerRenderer so it animates with the row on drag
             columnDefs = [
                 {
                     'field': 'Group',
                     'headerName': 'Group',
                     'editable': False,
                     'width': 130,
-                    'pinned': 'left'
+                    'pinned': 'left',
+                    'rowDrag': {'function': '["default","unselected"].indexOf(params.data.Group) === -1'},
+                },
+                {
+                    'field': 'color',
+                    'headerName': 'Color',
+                    'cellRenderer': 'ColorPickerRenderer',
+                    'editable': False,
+                    'width': 80,
+                    'pinned': 'left',
+                    'suppressSizeToFit': True,
                 },
                 {
                     'field': 'Size',
@@ -306,7 +326,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     'width': 90,
                     'singleClickEdit': True,
                     'cellEditor': 'agSelectCellEditor',
-                    'cellEditorParams': {'values': ['-', '4', '6', '8', '10', '12', '14', '16', '18', '20']}
+                    'cellEditorParams': {'values': ['-', '4', '6', '8', '10', '12', '14', '16', '18', '20', '22', '24', '26', '28', '30']}
                 },
                 {
                     'field': 'Opacity',
@@ -328,81 +348,27 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     'cellEditorParams': {'values': ['-', 'circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star']}
                 }
             ]
-            
-            table = dag.AgGrid(
+
+            return dag.AgGrid(
                 id='aesthetics-edit-table',
                 rowData=rows,
                 columnDefs=columnDefs,
                 defaultColDef={'flex': 1, 'minWidth': 80, 'resizable': True},
-                dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40},
-                style={'height': '350px', 'width': '100%'}
+                dashGridOptions={
+                    'rowSelection': 'single',
+                    'headerHeight': 40,
+                    'rowHeight': 40,
+                    'rowDragManaged': True,
+                    'animateRows': True,
+                },
+                style={
+                    'height': '350px',
+                    'width': '100%',
+                    'border': '1px solid #dee2e6',
+                    'borderRadius': '4px',
+                    'overflow': 'hidden',
+                }
             )
-            
-            # Create color pickers aligned with table rows (including header)
-            color_picker_column = [
-                # Header
-                html.Div('Color', style={
-                    'height': '40px',
-                    'display': 'flex',
-                    'alignItems': 'center',
-                    'justifyContent': 'center',
-                    'fontWeight': 'bold',
-                    'fontSize': '14px',
-                    'borderBottom': '2px solid #dee2e6',
-                    'backgroundColor': '#f8f9fa'
-                })
-            ]
-            
-            # Color picker for each row
-            for key, color_val in aesthetics['color'].items():
-                color_picker_column.append(
-                    html.Div([
-                        dbc.Input(
-                            type="color",
-                            id={'type': 'color-input-modal', 'index': str(key)},
-                            value=color_val,
-                            style={
-                                'width': '40px',
-                                'height': '32px',
-                                'padding': '0',
-                                'border': '1px solid #ced4da',
-                                'cursor': 'pointer',
-                                'borderRadius': '3px'
-                            }
-                        )
-                    ], style={
-                        'height': '40px',
-                        'display': 'flex',
-                        'alignItems': 'center',
-                        'justifyContent': 'center',
-                        'borderBottom': '1px solid #dee2e6'
-                    })
-                )
-            
-            # Create integrated table layout
-            integrated_table = html.Div([
-                html.Div(
-                    color_picker_column,
-                    style={
-                        'width': '80px',
-                        'flexShrink': 0,
-                        'borderRight': '1px solid #dee2e6',
-                        'backgroundColor': 'white'
-                    }
-                ),
-                html.Div(
-                    table,
-                    style={'flex': 1, 'overflow': 'hidden'}
-                )
-            ], style={
-                'display': 'flex',
-                'border': '1px solid #dee2e6',
-                'borderRadius': '4px',
-                'overflow': 'hidden',
-                'height': '350px'
-            })
-            
-            return integrated_table
             
         except Exception as e:
             logging.error(f"Error in update_aesthetics_table: {e}", exc_info=True)
@@ -440,7 +406,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             State('dropdown-group', 'value'),
             State({'type': 'color-input-modal', 'index': ALL}, 'value'),
             State({'type': 'color-input-modal', 'index': ALL}, 'id'),
-            State('aesthetics-edit-table', 'rowData'),
+            State('aesthetics-edit-table', 'virtualRowData'),
             State({'type': 'colorscale-dropdown-modal', 'index': ALL}, 'value')
         ],
         prevent_initial_call=True
@@ -503,21 +469,20 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                         if 'symbol_map' in group_aesthetics:
                             group_aesthetics['symbol_map'][key] = symbol_val
         else:
-            # For categorical, update colors from color pickers and size/opacity/symbol from AG Grid
-            
-            # Update colors from pattern-matched color pickers
-            if color_values and color_ids:
-                for val, id_dict in zip(color_values, color_ids):
-                    key = id_dict['index']
-                    # Handle type conversion
-                    if key not in group_aesthetics['color']:
-                        for existing_key in group_aesthetics['color'].keys():
-                            if str(existing_key) == str(key):
-                                key = existing_key
-                                break
-                    group_aesthetics['color'][key] = val
-            
-            # Update size/opacity/symbol from AG Grid rowData
+            # For categorical, update colors from grid Color column (virtualRowData)
+            if row_data:
+                for row in row_data:
+                    key = row.get('Group')
+                    color_val = row.get('color')
+                    if key and color_val:
+                        if key not in group_aesthetics['color']:
+                            for existing_key in group_aesthetics['color'].keys():
+                                if str(existing_key) == str(key):
+                                    key = existing_key
+                                    break
+                        group_aesthetics['color'][key] = color_val
+
+            # Update size/opacity/symbol from AG Grid virtualRowData
             # Process 'default' row first to get the new default values
             if row_data:
                 # First pass: update 'default' values
@@ -593,11 +558,35 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     else:
                         group_aesthetics['symbol'][key] = symbol_val
         
+        # Save plotting order from current row sequence (managed by drag-and-drop)
+        if not is_continuous and row_data:
+            group_aesthetics['order'] = [
+                row['Group'] for row in row_data
+                if row.get('Group') not in ('default', 'unselected')
+            ]
+
         # Update store
         aesthetics_store[group] = group_aesthetics
         logging.info(f"Aesthetics saved for group '{group}'")
         return aesthetics_store
     
+    # Keep default/unselected rows pinned at the top if a drag displaced them
+    @app.callback(
+        Output('aesthetics-edit-table', 'rowData'),
+        Input('aesthetics-edit-table', 'virtualRowData'),
+        prevent_initial_call=True
+    )
+    def enforce_fixed_rows_at_top(virtual_row_data):
+        if not virtual_row_data:
+            raise dash.exceptions.PreventUpdate
+        fixed = {'default', 'unselected'}
+        top2 = {r['Group'] for r in virtual_row_data[:2]}
+        if fixed.issubset(top2):
+            raise dash.exceptions.PreventUpdate  # already correct
+        fixed_rows = [r for r in virtual_row_data if r.get('Group') in fixed]
+        other_rows = [r for r in virtual_row_data if r.get('Group') not in fixed]
+        return fixed_rows + other_rows
+
     # Callback to export aesthetics to JSON file
     @app.callback(
         Output('download-aesthetics', 'data'),
@@ -671,8 +660,11 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     if key in group_data.get('symbol_map', {}):
                         filtered_group['symbol_map'][key] = group_data['symbol_map'][key]
             
+            if 'order' in group_data:
+                filtered_group['order'] = group_data['order']
+
             filtered_aesthetics[group] = filtered_group
-        
+
         # Create JSON string
         json_str = json.dumps(filtered_aesthetics, indent=2)
         

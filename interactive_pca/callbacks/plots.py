@@ -377,6 +377,11 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         opacity_map = aesthetics.get('opacity', {})
                         symbol_map = aesthetics.get('symbol', {})
                         unique_vals = [val for val in group_vals.unique() if not pd.isna(val)]
+                        order = aesthetics.get('order')
+                        if order:
+                            rev = list(reversed(order))
+                            omap = {v: i for i, v in enumerate(rev)}
+                            unique_vals.sort(key=lambda v: omap.get(str(v), -1))
                         for val in unique_vals:
                             mask = group_vals == val
                             subset_ids = [time_ids[i] for i in range(len(time_ids)) if mask.iloc[i]]

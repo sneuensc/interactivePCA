@@ -69,6 +69,23 @@ def get_selected_df_both(selected_ids):
     return _df[selected_mask], _df[~selected_mask]
 
 
+def _ordered_group_iter(df, group, aesthetics_group):
+    """Return (g, group_df) pairs in plotting order (Order 1 = last drawn = on top).
+
+    Groups not listed in aesthetics['order'] are placed first (bottom layer).
+    """
+    pairs = list(df.groupby(group, sort=False))
+    order = aesthetics_group.get('order')
+    if order:
+        # Reverse the order list so that index 0 (Order 1) maps to the highest
+        # sort key and is therefore appended last → drawn last → on top.
+        reversed_order = list(reversed(order))
+        order_map = {v: i for i, v in enumerate(reversed_order)}
+        # Unlisted groups get -1 → sort before everything → drawn first (bottom)
+        pairs.sort(key=lambda pair: order_map.get(str(pair[0]), -1))
+    return pairs
+
+
 def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, continuous=False, unselected=False, mapplot=False):
     """
     Build a Plotly marker dict for different cases (categorical, continuous, unselected).
@@ -189,7 +206,7 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, x
         ))
     else:
         # Categorical
-        for g, group_df in _df.groupby(group, sort=False):
+        for g, group_df in _ordered_group_iter(_df, group, aesthetics_group):
             traces.append(scatter_trace(
                 x=group_df[x_col],
                 y=group_df[y_col],
@@ -296,7 +313,7 @@ def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=
             showlegend=False
         ))
     else:
-        for g, group_df in df_selected.groupby(group, sort=False):
+        for g, group_df in _ordered_group_iter(df_selected, group, aesthetics_group):
             if group_df.empty:
                 continue
             traces.append(go.Scatter3d(
@@ -396,7 +413,7 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
             showlegend=legend,
         ))
     else:
-        for g, group_df in df_map.groupby(group, sort=False):
+        for g, group_df in _ordered_group_iter(df_map, group, aesthetics_group):
             if group_df.empty:
                 continue
             traces.append(go.Scattermap(

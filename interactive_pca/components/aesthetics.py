@@ -85,7 +85,11 @@ def merge_aesthetics(defaults, overrides):
         if isinstance(overrides['symbol_map'], dict):
             for key, val in overrides['symbol_map'].items():
                 result['symbol_map'][key] = val
-    
+
+    # Merge order (list)
+    if 'order' in overrides and isinstance(overrides['order'], list):
+        result['order'] = list(overrides['order'])
+
     return result
 
 
@@ -136,7 +140,8 @@ def get_init_aesthetics(args, group, df):
             for i, val in enumerate(unique_values):
                 # Convert to string to ensure consistent key type
                 aesthetics['color'][str(val)] = px_colors[i % len(px_colors)]
-    
+            aesthetics['order'] = [str(val) for val in unique_values]
+
     return aesthetics
 
 
