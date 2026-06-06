@@ -218,6 +218,7 @@ def merge_data(eigenvec, annotation, eigenvec_id_col='id', annotation_id_col=Non
 
         ## filter for Politcal_Entit == 'Greece'
         df = df[df['Political_Entit'] == 'Greece']
+
     else:
         df = eigenvec.copy()
     

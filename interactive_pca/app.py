@@ -13,6 +13,7 @@ from .plots import set_dataframe
 from .components import load_aesthetics_file, merge_aesthetics, get_init_aesthetics, register_hover_update_callbacks
 from .layouts import create_layout
 from .callbacks import register_all_callbacks
+from .callbacks.snapshot import register_snapshot_callback
 
 
 def create_app(args):
@@ -257,6 +258,9 @@ def create_app(args):
         prevent_initial_call='initial_duplicate'
     )
     
+    # ── Snapshot export ───────────────────────────────────────────────────
+    register_snapshot_callback(app)
+
     # Right-panel tab switching (Table / Details / Filter)
     app.clientside_callback(
         """
