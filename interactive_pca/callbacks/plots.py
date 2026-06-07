@@ -215,7 +215,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                          for t in callback_context.triggered}
         structure_changed = bool(triggered_ids & structural_inputs)
 
-        if structure_changed and selected_ids:
+        if selected_ids:
             selected_set = set(str(sid) for sid in selected_ids)
             for trace in fig_dict.get('data', []):
                 customdata = trace.get('customdata', [])
