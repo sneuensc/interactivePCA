@@ -408,12 +408,13 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             State('dropdown-group', 'value'),
             State({'type': 'color-input-modal', 'index': ALL}, 'value'),
             State({'type': 'color-input-modal', 'index': ALL}, 'id'),
+            State('aesthetics-edit-table', 'rowData'),
             State('aesthetics-edit-table', 'virtualRowData'),
             State({'type': 'colorscale-dropdown-modal', 'index': ALL}, 'value')
         ],
         prevent_initial_call=True
     )
-    def save_aesthetics_edits(n_clicks, aesthetics_store, group, color_values, color_ids, row_data, colorscale_values):
+    def save_aesthetics_edits(n_clicks, aesthetics_store, group, color_values, color_ids, row_data, virtual_row_data, colorscale_values):
         """Save aesthetics edits to store when Save button is clicked"""
         if not n_clicks or not aesthetics_store or not group:
             raise dash.exceptions.PreventUpdate
@@ -560,10 +561,13 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     else:
                         group_aesthetics['symbol'][key] = symbol_val
         
-        # Save plotting order from current row sequence (managed by drag-and-drop)
-        if not is_continuous and row_data:
+        # Save plotting order from virtualRowData (reflects drag-and-drop sequence).
+        # Cell values are read from rowData which is more reliably synced after
+        # in-cell edits (e.g. ColorPickerRenderer setDataValue).
+        order_source = virtual_row_data or row_data
+        if not is_continuous and order_source:
             group_aesthetics['order'] = [
-                row['Group'] for row in row_data
+                row['Group'] for row in order_source
                 if row.get('Group') not in ('default', 'unselected')
             ]
 
