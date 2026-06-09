@@ -350,14 +350,15 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             elif viz_mode == 'scatter':
                 # Scatter plot with jitter
                 np.random.seed(42)
-                jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
                 default_size = aesthetics['size'].get('default', 8)
                 default_opacity = aesthetics['opacity'].get('default', 0.7)
+                _cat_strip = False   # whether we drew per-group y-bands
 
                 if group != 'none' and group in df.columns:
                     group_vals = df.loc[time_vals.index, group]
                     if df[group].dtype.kind in 'fi':
-                        # Continuous variable - use colorscale
+                        # Continuous variable — single strip with colorscale
+                        jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
                         colorscale = aesthetics['color'].get('colorscale', 'Viridis')
                         _cont_mk = dict(
                             color=group_vals,
@@ -382,7 +383,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             showlegend=False
                         ))
                     else:
-                        # Categorical variable - use group colors
+                        # Categorical variable — one horizontal strip per group
+                        _cat_strip = True
                         color_map = aesthetics.get('color', {})
                         size_map = aesthetics.get('size', {})
                         opacity_map = aesthetics.get('opacity', {})
@@ -393,9 +395,12 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             rev = list(reversed(order))
                             omap = {v: i for i, v in enumerate(rev)}
                             unique_vals.sort(key=lambda v: omap.get(str(v), -1))
-                        for val in unique_vals:
+                        n_groups = len(unique_vals)
+                        for i, val in enumerate(unique_vals):
                             mask = group_vals == val
-                            subset_ids = [time_ids[i] for i in range(len(time_ids)) if mask.iloc[i]]
+                            n_pts = int(mask.sum())
+                            subset_ids = [time_ids[j] for j in range(len(time_ids)) if mask.iloc[j]]
+                            y_pos = i + np.random.uniform(-0.35, 0.35, size=n_pts)
                             _cat_mk = dict(
                                 color=color_map.get(str(val), default_color),
                                 size=size_map.get(str(val), default_size),
@@ -407,16 +412,18 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                                 _cat_mk['line'] = dict(color=_lc, width=1)
                             fig.add_trace(go.Scatter(
                                 x=time_vals[mask],
-                                y=jitter[mask.to_numpy()],
+                                y=y_pos,
                                 mode='markers',
                                 marker=_cat_mk,
                                 unselected=_unsel_marker,
                                 customdata=subset_ids,
-                                hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
+                                hovertemplate='<b>Group:</b> ' + str(val) + '<br><b>ID:</b> %{customdata}<br><extra></extra>',
                                 name=str(val),
                                 showlegend=False
                             ))
                 else:
+                    # No grouping — single strip
+                    jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
                     _none_mk = dict(color=default_color, size=default_size, opacity=default_opacity)
                     _lc = line_color_map.get('default')
                     if _lc:
@@ -433,14 +440,31 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         showlegend=False
                     ))
 
-                fig.update_layout(
-                    xaxis_title=time_variable,
-                    yaxis_title="",
-                    yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-                    autosize=True,
-                    dragmode='lasso',
-                    margin=dict(l=50, r=20, t=40, b=40)
-                )
+                if _cat_strip:
+                    fig.update_layout(
+                        xaxis_title=time_variable,
+                        yaxis=dict(
+                            tickmode='array',
+                            tickvals=list(range(n_groups)),
+                            ticktext=[str(v) for v in unique_vals],
+                            range=[-0.5, n_groups - 0.5],
+                            showgrid=True,
+                            zeroline=False,
+                            showticklabels=False,
+                        ),
+                        showlegend=False,
+                        autosize=True,
+                        dragmode='lasso',
+                        margin=dict(l=50, r=20, t=40, b=40),
+                    )
+                else:
+                    fig.update_layout(
+                        xaxis_title=time_variable,
+                        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+                        autosize=True,
+                        dragmode='lasso',
+                        margin=dict(l=50, r=20, t=40, b=40)
+                    )
 
             elif viz_mode == 'overlay':
                 # Overlapping histograms: all vs selected
