@@ -14,7 +14,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, State
 
-from ..plots import generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map
+from ..plots import generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map, build_symbol_legend_traces
 from ..utils import dict_of_dicts_to_tuple
 from ..components import get_aesthetics_for_group, update_figure_hover_templates
 
@@ -68,12 +68,15 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         Input('pca-3d-toggle', 'value'),
         Input('marker-aesthetics-store', 'data'),
         Input('pca-legend-toggle', 'value'),   # promoted from State so auto_set_legend is seen immediately
+        Input('dropdown-group-symbol', 'value'),
+        Input('symbol-aesthetics-store', 'data'),
         State('effective-hover-detailed', 'data'),
         State('selected-annotation-columns', 'data'),
         State('selection-store', 'data'),
         prevent_initial_call=False
     )
-    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, legend_toggle, hover_detailed, selected_cols, selected_ids):
+    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, legend_toggle,
+                                   group_symbol, symbol_store, hover_detailed, selected_cols, selected_ids):
         """Regenerate PCA figure when any structural or aesthetic parameter changes."""
         import json
         from dash import callback_context
@@ -81,7 +84,12 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         # Get current aesthetics
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
         aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
-        
+
+        # Symbol-group aesthetics (second dropdown)
+        gs = group_symbol if group_symbol and group_symbol != 'none' else None
+        sym_aest = (symbol_store or {}).get(gs, {}) if gs else {}
+        sym_tuple = dict_of_dicts_to_tuple(sym_aest) if sym_aest else None
+
         # Determine if legend should be shown
         is_categorical = (
             group != 'none'
@@ -93,7 +101,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             and group in df.columns
             and df[group].dtype.kind in 'fi'
         )
-        
+
         show_legend = False
         if is_categorical:
             n_unique = df[group].nunique()
@@ -102,7 +110,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 show_legend = show_legend and ('show_legend' in legend_toggle)
         elif is_continuous:
             show_legend = True
-        
+
         # Create 3D or 2D plot based on toggle
         if 'enable_3d' in is_3d:
             # Convert selected_ids to tuple for caching
@@ -114,7 +122,9 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 group=group,
                 aesthetics_tuple=aesthetics_tuple,
                 legend=show_legend,
-                selected_ids_tuple=selected_tuple
+                selected_ids_tuple=selected_tuple,
+                group_symbol=gs,
+                symbol_aest_tuple=sym_tuple,
             )
             fig.update_layout(
                 template='plotly_white',
@@ -132,7 +142,9 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 y_col=pc_y,
                 group=group,
                 aesthetics_tuple=aesthetics_tuple,
-                legend=show_legend
+                legend=show_legend,
+                group_symbol=gs,
+                symbol_aest_tuple=sym_tuple,
             )
             fig.update_layout(
                 template='plotly_white',
@@ -201,8 +213,16 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         # Apply hover formatting with current settings
         fig_dict = fig.to_dict()
         group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
-        fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca')
-        
+        fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca', group_symbol=gs)
+
+        # Symbol-group legend — prepend empty dummy traces so that with
+        # traceorder='reversed' they appear at the BOTTOM of the legend.
+        if gs and sym_aest and show_legend:
+            _t = 'scatter3d' if 'enable_3d' in is_3d else ('scattergl' if len(df) > 3000 else 'scatter')
+            _sz = aesthetics.get('size', {}).get('default', 8)
+            sym_entries = build_symbol_legend_traces(gs, sym_aest, default_size=_sz, trace_type=_t)
+            fig_dict['data'] = sym_entries + list(fig_dict['data'])
+
         # Determine what triggered this callback.
         # For aesthetics/legend-only changes the structural layout is unchanged,
         # so uirevision will preserve the client-side lasso selection — we must
@@ -233,21 +253,29 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Output('pca-map-plot', 'figure'),
             Input('dropdown-group', 'value'),
             Input('marker-aesthetics-store', 'data'),
+            Input('dropdown-group-symbol', 'value'),
+            Input('symbol-aesthetics-store', 'data'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             State('selection-store', 'data'),
         )
-        def update_map_plot(group, aesthetics_store, hover_detailed, selected_cols, selection_store):
+        def update_map_plot(group, aesthetics_store, group_symbol, symbol_store,
+                            hover_detailed, selected_cols, selection_store):
             if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
                 return {}
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
             aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
+            gs = group_symbol if group_symbol and group_symbol != 'none' else None
+            sym_aest = (symbol_store or {}).get(gs, {}) if gs else {}
+            sym_tuple = dict_of_dicts_to_tuple(sym_aest) if sym_aest else None
             fig = create_geographical_map(
                 group=group,
                 aesthetics_tuple=aesthetics_tuple,
                 legend=False,
                 lat_col=ANNOTATION_LAT,
-                lon_col=ANNOTATION_LONG
+                lon_col=ANNOTATION_LONG,
+                group_symbol=gs,
+                symbol_aest_tuple=sym_tuple,
             )
             is_categorical = (
                 group != 'none'
@@ -274,7 +302,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
 
             fig_dict = fig.to_dict()
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
-            fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map')
+            fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'map', group_symbol=gs)
 
             # Reapply selection so it survives group/aesthetics changes
             if selection_store:
@@ -299,11 +327,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('time-variable', 'value'),
             Input('selection-store', 'data'),
             Input('marker-aesthetics-store', 'data'),
+            Input('dropdown-group-symbol', 'value'),
+            Input('symbol-aesthetics-store', 'data'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             prevent_initial_call=False
         )
-        def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store, hover_detailed, selected_cols):
+        def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store,
+                                   group_symbol, symbol_store, hover_detailed, selected_cols):
             if time_variable is None or time_variable not in df.columns:
                 return {}
 
@@ -324,6 +355,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             default_color   = aesthetics['color'].get('default', 'steelblue')
             unsel_color     = aesthetics['color'].get('unselected', '#cccccc')
             unsel_opacity   = aesthetics['opacity'].get('unselected', 0.3)
+            gs = group_symbol if group_symbol and group_symbol != 'none' else None
+            sym_aest = (symbol_store or {}).get(gs, {}) if gs else {}
             unsel_size_base = aesthetics['size'].get('default', 8)
             unsel_size      = aesthetics['size'].get('unselected', unsel_size_base)
             line_color_map  = aesthetics.get('line_color', {})
@@ -401,11 +434,16 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             n_pts = int(mask.sum())
                             subset_ids = [time_ids[j] for j in range(len(time_ids)) if mask.iloc[j]]
                             y_pos = i + np.random.uniform(-0.35, 0.35, size=n_pts)
+                            if gs and sym_aest and gs in df.columns:
+                                per_sym = [sym_aest.get(str(v), sym_aest.get('default', 'circle'))
+                                           for v in df.loc[time_vals.index[mask.to_numpy()], gs]]
+                            else:
+                                per_sym = symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle'))
                             _cat_mk = dict(
                                 color=color_map.get(str(val), default_color),
                                 size=size_map.get(str(val), default_size),
                                 opacity=opacity_map.get(str(val), default_opacity),
-                                symbol=symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle'))
+                                symbol=per_sym
                             )
                             _lc = line_color_map.get(str(val), line_color_map.get('default'))
                             if _lc:
@@ -527,7 +565,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             # Apply hover text formatting
             fig_dict = fig.to_dict()
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
-            fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time')
+            fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time', group_symbol=gs)
 
             # Apply selectedpoints for scatter mode (histogram bins don't support it).
             # Done here rather than in a separate callback to avoid a race condition

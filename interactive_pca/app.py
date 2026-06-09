@@ -91,6 +91,7 @@ def create_app(args):
     
     # Initialize grouping options
     dropdown_group_list = ['none']
+    dropdown_group_symbol_list = ['none']
     if annotation_desc is not None:
         # Add columns suitable for grouping
         grouping_cols = annotation_desc.loc[
@@ -98,8 +99,13 @@ def create_app(args):
             'Abbreviation'
         ].tolist()
         dropdown_group_list.extend(grouping_cols)
+        # Shape grouping: categorical columns only (no PCs, no continuous)
+        dropdown_group_symbol_list.extend(
+            col for col in grouping_cols
+            if col in df.columns and df[col].dtype.kind not in 'fi'
+        )
 
-    # Include PCs as grouping options
+    # Include PCs as grouping options (color only, not shape)
     for pc in pcs:
         if pc not in dropdown_group_list:
             dropdown_group_list.append(pc)
@@ -139,7 +145,8 @@ def create_app(args):
         args, df, pcs,
         annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
         init_selected_ids, init_group, init_continuous, init_aesthetics,
-        dropdown_group_list, dropdown_list_continuous
+        dropdown_group_list, dropdown_list_continuous,
+        dropdown_group_symbol_list=dropdown_group_symbol_list
     )
     app.layout = layout_data['layout']
     tab_content_map = layout_data['tab_content_map']

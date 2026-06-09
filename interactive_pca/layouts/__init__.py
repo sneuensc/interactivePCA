@@ -28,7 +28,8 @@ from ..components import (
 def create_layout(args, df, pcs,
                  annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
                  init_selected_ids, init_group, init_continuous, init_aesthetics,
-                 dropdown_group_list, dropdown_list_continuous):
+                 dropdown_group_list, dropdown_list_continuous,
+                 dropdown_group_symbol_list=None):
     """
     Create the main application layout.
     
@@ -78,7 +79,8 @@ def create_layout(args, df, pcs,
         'content': create_pca_tab(
             pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
             df, init_aesthetics, ANNOTATION_LONG, annotation_columns, continuous_columns, annotation_desc,
-            init_selected_ids
+            init_selected_ids,
+            dropdown_group_symbol_list=dropdown_group_symbol_list or dropdown_group_list
         )
     })
     
@@ -239,6 +241,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
         dcc.Store(id='hover-sync-dummy', data=None),  # Dummy output for hover-sync clientside callback
         dcc.Store(id='hidden-groups-store', data={}),  # Group values hidden via legend click
+        dcc.Store(id='symbol-aesthetics-store', data={}),  # Symbol mappings for second group
         dcc.Store(id='right-panel-tabs-dummy', data=None),  # Dummy output for right-panel tab switching
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         dcc.Download(id='download-snapshot'),
@@ -319,7 +322,8 @@ def create_layout(args, df, pcs,
 
 
 def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
-                   df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None, init_selected_ids=None):
+                   df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None, init_selected_ids=None,
+                   dropdown_group_symbol_list=None):
     """Create PCA tab layout with map on the right and extra panels below."""
     # Determine if legend should be shown initially (only if group has multiple unique values)
     init_show_legend = []
@@ -409,57 +413,28 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     trace['selectedpoints'] = np.where(mask)[0].tolist()
             init_map_fig = init_map_dict
     
-    # Control section (PCA controls + selection actions)
+    # Control section (grouping + selection actions — axis controls live above the PCA plot)
     control_section = html.Div([
         # Left side controls
         html.Div([
             html.Div([
-                html.Label('X:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-pc-x',
-                    options=[{'label': pc, 'value': pc} for pc in pcs],
-                    value=pcs[0],
-                    clearable=False,
-                    style={'width': '100px'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '12px'}),
-            html.Div([
-                html.Label('Y:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-pc-y',
-                    options=[{'label': pc, 'value': pc} for pc in pcs],
-                    value=pcs[1],
-                    clearable=False,
-                    style={'width': '100px'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '12px'}),
-            html.Div([
-                html.Label('Z:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-pc-z',
-                    options=[{'label': pc, 'value': pc} for pc in pcs],
-                    value=pcs[2] if len(pcs) > 2 else pcs[0],
-                    clearable=False,
-                    style={'width': '100px'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '12px', 'display': 'none'}, id='z-axis-container'),
-            html.Div([
-                dcc.Checklist(
-                    id='pca-3d-toggle',
-                    options=[{'label': ' 3D', 'value': 'enable_3d'}],
-                    value=[],
-                    style={'marginRight': '0px'},
-                    labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
-                )
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
-            html.Div([
-                html.Label('Group by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                html.Label('Color by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
                 dcc.Dropdown(
                     id='dropdown-group',
                     options=[{'label': g, 'value': g} for g in dropdown_group_list],
                     value=init_group,
                     clearable=False,
-                    style={'width': '220px'}
+                    style={'width': '200px'}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '8px'}),
+            html.Div([
+                html.Label('Shape by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                dcc.Dropdown(
+                    id='dropdown-group-symbol',
+                    options=[{'label': g, 'value': g} for g in (dropdown_group_symbol_list or dropdown_group_list)],
+                    value='none',
+                    clearable=False,
+                    style={'width': '200px'}
                 ),
             ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
             html.Div([
@@ -552,13 +527,56 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         'borderRadius': '5px'
     })
     
-    # PCA plot (left side)
-    pca_plot = dcc.Graph(
-        id='pca-plot',
-        figure=init_fig,
-        style={'height': '100%'},
-        clear_on_unhover=True
-    )
+    # PCA plot with axis control bar above it (mirrors the time-plot pattern)
+    _lbl = {'fontWeight': 'bold', 'fontSize': '13px', 'marginRight': '6px'}
+    _lbl_ml = {**_lbl, 'marginLeft': '12px'}
+    pca_plot = html.Div([
+        html.Div([
+            html.Label('X:', style=_lbl),
+            dcc.Dropdown(
+                id='dropdown-pc-x',
+                options=[{'label': pc, 'value': pc} for pc in pcs],
+                value=pcs[0],
+                clearable=False,
+                style={'width': '90px', 'fontSize': '13px'}
+            ),
+            html.Label('Y:', style=_lbl_ml),
+            dcc.Dropdown(
+                id='dropdown-pc-y',
+                options=[{'label': pc, 'value': pc} for pc in pcs],
+                value=pcs[1],
+                clearable=False,
+                style={'width': '90px', 'fontSize': '13px'}
+            ),
+            html.Div([
+                html.Label('Z:', style=_lbl_ml),
+                dcc.Dropdown(
+                    id='dropdown-pc-z',
+                    options=[{'label': pc, 'value': pc} for pc in pcs],
+                    value=pcs[2] if len(pcs) > 2 else pcs[0],
+                    clearable=False,
+                    style={'width': '90px', 'fontSize': '13px'}
+                ),
+            ], id='z-axis-container', style={'display': 'none', 'alignItems': 'center'}),
+            dcc.Checklist(
+                id='pca-3d-toggle',
+                options=[{'label': ' 3D', 'value': 'enable_3d'}],
+                value=[],
+                style={'marginLeft': '12px'},
+                labelStyle={'whiteSpace': 'nowrap', 'fontSize': '13px'}
+            ),
+        ], style={
+            'display': 'flex', 'alignItems': 'center', 'flex': '0 0 auto',
+            'padding': '6px 12px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px',
+            'marginBottom': '4px'
+        }),
+        dcc.Graph(
+            id='pca-plot',
+            figure=init_fig,
+            style={'flex': '1 1 0', 'minHeight': '0'},
+            clear_on_unhover=True
+        ),
+    ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
 
     # Optional panels
     show_annotation_table = annotation_desc is not None

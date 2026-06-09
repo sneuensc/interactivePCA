@@ -69,6 +69,47 @@ def get_selected_df_both(selected_ids):
     return _df[selected_mask], _df[~selected_mask]
 
 
+_SCATTER3D_SYMBOL_MAP = {
+    'triangle-up':   'circle',
+    'triangle-down': 'square',
+    'star':          'diamond',
+}
+
+def _to_3d_symbol(sym):
+    """Map a 2D Plotly symbol name to the nearest valid Scatter3d symbol."""
+    if isinstance(sym, (list, tuple, np.ndarray)):
+        return [_SCATTER3D_SYMBOL_MAP.get(s, s) for s in sym]
+    return _SCATTER3D_SYMBOL_MAP.get(sym, sym)
+
+
+def build_symbol_legend_traces(group_symbol, symbol_aest, default_size=8, trace_type='scatter'):
+    """Return a list of empty trace dicts that form the shape-group legend section.
+
+    Prepend these to fig_dict['data'] so that with traceorder='reversed' they
+    appear at the BOTTOM of the legend (below the colour-group entries).
+    """
+    entries = [(k, v) for k, v in symbol_aest.items() if k != 'default']
+    result = []
+    for i, (sym_val, sym_name) in enumerate(entries):
+        trace = {
+            'type': trace_type,
+            'mode': 'markers',
+            'marker': {'size': default_size, 'color': '#888888', 'symbol': sym_name},
+            'name': str(sym_val),
+            'legendgroup': '__shape__',
+            'showlegend': True,
+            'hovertemplate': '<extra></extra>',
+        }
+        if trace_type == 'scatter3d':
+            trace['x'] = []; trace['y'] = []; trace['z'] = []
+        else:
+            trace['x'] = []; trace['y'] = []
+        if i == 0:
+            trace['legendgrouptitle'] = {'text': group_symbol}
+        result.append(trace)
+    return result
+
+
 def _ordered_group_iter(df, group, aesthetics_group):
     """Return (g, group_df) pairs in plotting order (Order 1 = last drawn = on top).
 
@@ -162,29 +203,24 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
 
 
 @lru_cache(maxsize=32)
-def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, xlab=True, ylab=True):
-    """
-    Generate 2D scatter plot (cached for performance).
-    
-    Args:
-        x_col: X-axis column name
-        y_col: Y-axis column name
-        group: Grouping column name
-        aesthetics_tuple: Tuple representation of aesthetics (for caching)
-        legend: Whether to show legend
-        xlab: Whether to show x-axis label
-        ylab: Whether to show y-axis label
-    
-    Returns:
-        Plotly Figure object
-    
-    Note:
-        For datasets > 3000 points, scattergl (WebGL) is used for better performance.
-        Uses global _df DataFrame.
-    """
+def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, xlab=True, ylab=True,
+                           group_symbol=None, symbol_aest_tuple=None):
+    """Generate 2D scatter plot (cached). group_symbol overrides per-point symbols."""
     aesthetics_group = tuple_to_dict_of_dicts(aesthetics_tuple)
+    symbol_aest = tuple_to_dict_of_dicts(symbol_aest_tuple) if symbol_aest_tuple else {}
+    dual = bool(group_symbol and group_symbol != 'none' and
+                group_symbol in _df.columns and symbol_aest)
+
+    def _mk(g, df_sub):
+        """Build marker dict, optionally applying per-point symbol overrides."""
+        m = dict(get_marker_dict(g, aesthetics_group))
+        if dual:
+            m['symbol'] = [symbol_aest.get(str(v), symbol_aest.get('default', 'circle'))
+                           for v in df_sub[group_symbol]]
+        return m
+
     traces = []
-    
+
     # Use WebGL for large datasets for better performance
     use_gl = len(_df) > 3000
     scatter_trace = go.Scattergl if use_gl else go.Scatter
@@ -194,7 +230,7 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, x
             x=_df[x_col],
             y=_df[y_col],
             mode='markers',
-            marker=get_marker_dict(group, aesthetics_group),
+            marker=_mk('none', _df),
             unselected=dict(marker=get_marker_dict(group, aesthetics_group, unselected=True)),
             name=str(group),
             customdata=_df['id'],
@@ -204,11 +240,15 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, x
         ))
     elif _df[group].dtype.kind in 'fi':
         # Continuous variable
+        m = dict(get_marker_dict(group, aesthetics_group, df_subset=_df, legend=legend, continuous=True))
+        if dual:
+            m['symbol'] = [symbol_aest.get(str(v), symbol_aest.get('default', 'circle'))
+                           for v in _df[group_symbol]]
         traces.append(scatter_trace(
             x=_df[x_col],
             y=_df[y_col],
             mode='markers',
-            marker=get_marker_dict(group, aesthetics_group, df_subset=_df, legend=legend, continuous=True),
+            marker=m,
             unselected=dict(marker=get_marker_dict(group, aesthetics_group, unselected=True)),
             name=group,
             customdata=_df['id'],
@@ -223,7 +263,7 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, x
                 x=group_df[x_col],
                 y=group_df[y_col],
                 mode='markers',
-                marker=get_marker_dict(g, aesthetics_group),
+                marker=_mk(g, group_df),
                 unselected=dict(marker=get_marker_dict(g, aesthetics_group, unselected=True)),
                 name=str(g),
                 customdata=group_df['id'],
@@ -256,34 +296,28 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, x
 
 @lru_cache(maxsize=32)
 def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=True, 
-                          xlab=True, ylab=True, zlab=True, selected_ids_tuple=None):
-    """
-    Generate 3D scatter plot (cached for performance).
-    
-    Args:
-        x_col: X-axis column name
-        y_col: Y-axis column name
-        z_col: Z-axis column name
-        group: Grouping column name
-        aesthetics_tuple: Tuple representation of aesthetics (for caching)
-        legend: Whether to show legend
-        xlab: Whether to show x-axis label
-        ylab: Whether to show y-axis label
-        zlab: Whether to show z-axis label
-        selected_ids_tuple: Tuple of selected IDs
-
-    Note:
-        Scatter3d does not have selected/unselected styling, so we handle this by creating separate traces for selected and unselected points.
-        Uses global _df DataFrame.
-    
-    Returns:
-        Plotly Figure object
-    """
+                          xlab=True, ylab=True, zlab=True, selected_ids_tuple=None,
+                          group_symbol=None, symbol_aest_tuple=None):
+    """Generate 3D scatter plot (cached). group_symbol overrides per-point symbols."""
     aesthetics_group = tuple_to_dict_of_dicts(aesthetics_tuple)
+    symbol_aest = tuple_to_dict_of_dicts(symbol_aest_tuple) if symbol_aest_tuple else {}
     selected_ids = list(selected_ids_tuple) if selected_ids_tuple else []
-    
+    dual = bool(group_symbol and group_symbol != 'none' and
+                group_symbol in _df.columns and symbol_aest)
+
+    def _mk(g, df_sub):
+        m = dict(get_marker_dict(g, aesthetics_group))
+        if dual:
+            m['symbol'] = _to_3d_symbol(
+                [symbol_aest.get(str(v), symbol_aest.get('default', 'circle'))
+                 for v in df_sub[group_symbol]]
+            )
+        else:
+            m['symbol'] = _to_3d_symbol(m.get('symbol', 'circle'))
+        return m
+
     traces = []
-    
+
     # Split into selected and unselected
     df_selected, df_unselected = get_selected_df_both(selected_ids)
 
@@ -306,19 +340,23 @@ def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=
             y=df_selected[y_col],
             z=df_selected[z_col],
             mode='markers',
-            marker=get_marker_dict(group, aesthetics_group),
+            marker=_mk('none', df_selected),
             name=str(group),
             customdata=df_selected['id'],
             text=group,
             showlegend=legend
         ))
     elif _df[group].dtype.kind in 'fi':
+        m = dict(get_marker_dict(group, aesthetics_group, df_subset=df_selected, legend=legend, continuous=True))
+        if dual:
+            m['symbol'] = [symbol_aest.get(str(v), symbol_aest.get('default', 'circle'))
+                           for v in df_selected[group_symbol]]
         traces.append(go.Scatter3d(
             x=df_selected[x_col],
             y=df_selected[y_col],
             z=df_selected[z_col],
             mode='markers',
-            marker=get_marker_dict(group, aesthetics_group, df_subset=df_selected, legend=legend, continuous=True),
+            marker=m,
             name=group,
             customdata=df_selected['id'],
             text=df_selected[group],
@@ -333,7 +371,7 @@ def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=
                 y=group_df[y_col],
                 z=group_df[z_col],
                 mode='markers',
-                marker=get_marker_dict(g, aesthetics_group),
+                marker=_mk(g, group_df),
                 name=str(g),
                 customdata=group_df['id'],
                 text=group_df[group],
@@ -362,7 +400,8 @@ def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=
 
 
 @lru_cache(maxsize=32)
-def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None):
+def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None,
+                                group_symbol=None, symbol_aest_tuple=None):
     """
     Generate map figure using Scattermap (cached for performance).
     

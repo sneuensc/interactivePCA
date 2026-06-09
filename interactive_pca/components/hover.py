@@ -6,86 +6,90 @@ import pandas as pd
 from dash import Input, Output, State
 
 
-def build_hover_text(df, annotation_desc, group=None, detailed=False, selected_columns=None, group_color_map=None):
+def build_hover_text(df, annotation_desc, group=None, detailed=False, selected_columns=None,
+                     group_color_map=None, group_symbol=None):
     """
     Build hover text for points in plots.
-    
+
     Args:
         df: DataFrame with data
         annotation_desc: DataFrame describing annotation columns
-        group: Currently selected group column (for displaying in minimal hover)
-        detailed: If True, include all annotation columns; if False, only include id and group
-        selected_columns: List of specific columns to display in detailed hover (from annotation table)
-        group_color_map: Dictionary mapping group values to colors for coloring group text
-    
+        group: Color-group column name
+        detailed: If True, include all annotation columns
+        selected_columns: Columns to display in detailed hover
+        group_color_map: Dict mapping group values to colors
+        group_symbol: Shape-group column name (second grouping variable)
+
     Returns:
         List of hover text strings with HTML formatting
     """
     hover_texts = []
-    
+    show_symbol = bool(group_symbol and group_symbol != 'none' and group_symbol in df.columns)
+
     if not detailed or annotation_desc is None:
-        # Minimal hover - show ID and group (if available and selected)
-        for idx, row in df.iterrows():
+        # Minimal hover — ID, colour group, shape group
+        for _, row in df.iterrows():
             text_parts = [f"<b>ID:</b> {row['id']}"]
             if group and group != 'none' and group in df.columns:
                 group_val = row[group]
                 if pd.notna(group_val):
-                    # Color both group name and value if color map is available
-                    # Try both str(group_val) and group_val as keys
                     color = None
                     if group_color_map:
                         color = group_color_map.get(str(group_val)) or group_color_map.get(group_val)
-                    
                     if color:
                         text_parts.append(f"<span style='color:{color}'><b>{group}:</b> {group_val}</span>")
                     else:
                         text_parts.append(f"<b>{group}:</b> {group_val}")
+            if show_symbol:
+                sym_val = row[group_symbol]
+                if pd.notna(sym_val):
+                    text_parts.append(f"<b>{group_symbol}:</b> {sym_val}")
             hover_texts.append("<br>".join(text_parts))
         return hover_texts
-    
-    # Build detailed hover text from selected columns or annotation columns
+
+    # Detailed hover
     if selected_columns:
-        # Use only the selected columns from the annotation table
         display_cols = [col for col in selected_columns if col in df.columns]
     else:
-        # Fallback: use all from annotation_desc
         display_cols = []
-        if 'Abbreviation' in annotation_desc.columns:
-            display_cols = annotation_desc['Abbreviation'].dropna().tolist()
-        else:
-            display_cols = [col for col in annotation_desc.columns if col != 'id']
+        if annotation_desc is not None:
+            if 'Abbreviation' in annotation_desc.columns:
+                display_cols = annotation_desc['Abbreviation'].dropna().tolist()
+            else:
+                display_cols = [col for col in annotation_desc.columns if col != 'id']
         display_cols = [col for col in display_cols if col in df.columns]
-    # Remove ID column to avoid duplicating the explicit ID line
     display_cols = [col for col in display_cols if col.lower() != 'id']
-    
-    for idx, row in df.iterrows():
+
+    skip_cols = {group, group_symbol} - {None, 'none'}
+
+    for _, row in df.iterrows():
         text_parts = [f"<b>ID:</b> {row['id']}"]
-        # Always add group first if available (for detailed hover)
         if group and group != 'none' and group in df.columns:
             group_val = row[group]
             if pd.notna(group_val):
-                # Color both group name and value if color map is available
-                # Try both str(group_val) and group_val as keys
                 color = None
                 if group_color_map:
                     color = group_color_map.get(str(group_val)) or group_color_map.get(group_val)
-                
                 if color:
                     text_parts.append(f"<span style='color:{color}'><b>{group}:</b> {group_val}</span>")
                 else:
                     text_parts.append(f"<b>{group}:</b> {group_val}")
-        # Add other display columns, excluding the group column to avoid duplicates
+        if show_symbol:
+            sym_val = row[group_symbol]
+            if pd.notna(sym_val):
+                text_parts.append(f"<b>{group_symbol}:</b> {sym_val}")
         for col in display_cols:
-            if col != group:  # Skip group column as it's already added above
+            if col not in skip_cols:
                 val = row[col]
                 if pd.notna(val):
                     text_parts.append(f"<b>{col}:</b> {val}")
         hover_texts.append("<br>".join(text_parts))
-    
+
     return hover_texts
 
 
-def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed=False, selected_columns=None, group_color_map=None, plot_type='pca'):
+def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed=False, selected_columns=None,
+                                  group_color_map=None, plot_type='pca', group_symbol=None):
     """
     Update hover text in a figure based on detailed flag.
     
@@ -106,7 +110,8 @@ def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed
         return fig
     
     # Build hover text for all points in the dataframe
-    all_hover_texts = build_hover_text(df, annotation_desc, group, detailed, selected_columns, group_color_map)
+    all_hover_texts = build_hover_text(df, annotation_desc, group, detailed, selected_columns,
+                                       group_color_map, group_symbol=group_symbol)
     
     # Create a mapping from ID to hover text
     id_to_hover = dict(zip(df['id'], all_hover_texts))
