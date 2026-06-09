@@ -166,11 +166,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         uirev = f'{pc_x}-{pc_y}-{pc_z}-{mode_str}'
 
         # Update layout
+        dual_legend = bool(gs and sym_aest)
+        _r_margin = 180 if (is_categorical and show_legend and dual_legend) else \
+                    140 if (is_categorical and show_legend) else 20
         if 'enable_3d' not in is_3d:
             fig.update_layout(
                 autosize=True,
                 uirevision=uirev,
-                margin=dict(l=50, r=140 if (is_categorical and show_legend) else 20, t=40, b=40),
+                margin=dict(l=50, r=_r_margin, t=40, b=40),
                 legend=dict(
                     visible=show_legend,
                     x=1.02 if is_categorical else 0.02,
@@ -215,15 +218,27 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
         fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca', group_symbol=gs)
 
-        # Symbol-group legend — prepend so that with traceorder='reversed'
-        # they appear at the bottom (colour group at the top).
+        # Shape-group legend — independent legend2 box below the colour legend.
+        # Traces carry legend='legend2' so they never appear in legend1.
         if gs and sym_aest:
             _t = 'scatter3d' if 'enable_3d' in is_3d else ('scattergl' if len(df) > 3000 else 'scatter')
             _sz = aesthetics.get('size', {}).get('default', 8)
             sym_entries = build_symbol_legend_traces(gs, sym_aest, default_size=_sz, trace_type=_t)
-            fig_dict['data'] = sym_entries + list(fig_dict['data'])
+            fig_dict['data'] = list(fig_dict['data']) + sym_entries  # append, order irrelevant
             try:
+                leg = fig_dict['layout'].get('legend', {})
                 fig_dict['layout']['legend']['visible'] = True
+                # Position legend2 below legend1; each entry ≈ 0.04 normalised units
+                n_color = sum(1 for t in fig_dict['data']
+                              if t.get('showlegend') and t.get('legend', '') != 'legend2')
+                leg2_y = max(0.02, 1.0 - (n_color + 0.5) * 0.04)
+                fig_dict['layout']['legend2'] = {
+                    'x': leg.get('x', 1.02),
+                    'xanchor': 'left',
+                    'y': leg2_y,
+                    'yanchor': 'top',
+                    'traceorder': 'normal',
+                }
             except (KeyError, TypeError):
                 pass
 

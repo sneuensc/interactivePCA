@@ -88,30 +88,28 @@ def build_symbol_legend_traces(group_symbol, symbol_aest, default_size=8, trace_
     Prepend these to fig_dict['data'] so that with traceorder='reversed' they
     appear at the BOTTOM of the legend (below the colour-group entries).
     """
+    # Shape traces go into legend2 (a second independent Plotly legend box).
+    # Natural (non-reversed) ordering works here since legend2 has its own
+    # traceorder='normal'.  Title trace first → appears at top of legend2.
     entries = [(k, v) for k, v in symbol_aest.items() if k != 'default']
     result = []
-    # Title row — zero-size invisible marker, name = variable label
-    title_trace = {
-        'type': trace_type,
-        'mode': 'markers',
+    title = {
+        'type': trace_type, 'mode': 'markers',
         'marker': {'size': 0, 'color': 'rgba(0,0,0,0)', 'symbol': 'circle'},
         'name': f'<b>{group_symbol}</b>',
-        'showlegend': True,
-        'hovertemplate': '<extra></extra>',
+        'legend': 'legend2', 'showlegend': True, 'hovertemplate': '<extra></extra>',
     }
     if trace_type == 'scatter3d':
-        title_trace['x'] = [None]; title_trace['y'] = [None]; title_trace['z'] = [None]
+        title['x'] = [None]; title['y'] = [None]; title['z'] = [None]
     else:
-        title_trace['x'] = [None]; title_trace['y'] = [None]
-    result.append(title_trace)
+        title['x'] = [None]; title['y'] = [None]
+    result.append(title)
     for sym_val, sym_name in entries:
         trace = {
-            'type': trace_type,
-            'mode': 'markers',
+            'type': trace_type, 'mode': 'markers',
             'marker': {'size': default_size, 'color': '#888888', 'symbol': sym_name},
             'name': f'  {sym_val}',
-            'showlegend': True,
-            'hovertemplate': '<extra></extra>',
+            'legend': 'legend2', 'showlegend': True, 'hovertemplate': '<extra></extra>',
         }
         if trace_type == 'scatter3d':
             trace['x'] = [None]; trace['y'] = [None]; trace['z'] = [None]
