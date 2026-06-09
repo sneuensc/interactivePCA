@@ -106,6 +106,11 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
     point_size = aesthetics_group['size']
     point_opacity = aesthetics_group['opacity']
     point_symbol = aesthetics_group['symbol'] if not mapplot else aesthetics_group['symbol_map']
+    # line_color may be absent in stores created before this feature was added;
+    # fall back to fill colour so the map/scatter render correctly regardless.
+    line_color_map = aesthetics_group.get('line_color')
+    if line_color_map is None:
+        line_color_map = point_color   # fill colour as default border
 
     if group == 'none':
         group = 'default'
@@ -124,6 +129,7 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
             marker = dict(size=unsel_size, color=_to_rgba(unsel_color, unsel_opacity))
         else:
             marker = dict(size=unsel_size, color=unsel_color, opacity=unsel_opacity)
+        lc = line_color_map.get('unselected')
     # Continuous color scale
     elif continuous:
         # Use provided subset or global df
@@ -137,6 +143,7 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
             colorbar=dict(title=group) if legend else None,
             showscale=legend
         )
+        lc = line_color_map.get(group, line_color_map.get('default'))
     # Categorical color
     else:
         marker = dict(
@@ -145,6 +152,11 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
             symbol=point_symbol.get(group, point_symbol['default']),
             color=point_color.get(group, point_color.get('default'))
         )
+        lc = line_color_map.get(group, line_color_map.get('default'))
+
+    # unselected.marker and Scattermap.Marker do not accept 'line'
+    if lc and not unselected and not mapplot:
+        marker['line'] = dict(color=lc, width=1)
 
     return marker
 

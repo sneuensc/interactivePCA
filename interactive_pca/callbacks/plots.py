@@ -164,7 +164,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     x=1.02 if is_categorical else 0.02,
                     y=1 if is_categorical else 0.98,
                     xanchor='left',
-                    yanchor='top'
+                    yanchor='top',
+                    traceorder='reversed',
                 ),
                 dragmode='lasso',
                 hovermode='closest',
@@ -183,7 +184,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     x=1.02 if is_categorical else 0.02,
                     y=1 if is_categorical else 0.98,
                     xanchor='left',
-                    yanchor='top'
+                    yanchor='top',
+                    traceorder='reversed',
                 ),
                 hovermode='closest',
                 hoverlabel=dict(
@@ -259,7 +261,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     x=1.02 if is_categorical else 0.02,
                     y=1 if is_categorical else 0.98,
                     xanchor='left',
-                    yanchor='top'
+                    yanchor='top',
+                    traceorder='reversed',
                 ),
                 dragmode='lasso',
                 hoverlabel=dict(
@@ -323,7 +326,11 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             unsel_opacity   = aesthetics['opacity'].get('unselected', 0.3)
             unsel_size_base = aesthetics['size'].get('default', 8)
             unsel_size      = aesthetics['size'].get('unselected', unsel_size_base)
-            _unsel_marker   = dict(marker=dict(color=unsel_color, opacity=unsel_opacity, size=unsel_size))
+            line_color_map  = aesthetics.get('line_color', {})
+            unsel_lc        = line_color_map.get('unselected')
+            # unselected.marker only accepts color/opacity/size — no 'line'
+            _unsel_mk_dict  = dict(color=unsel_color, opacity=unsel_opacity, size=unsel_size)
+            _unsel_marker   = dict(marker=_unsel_mk_dict)
 
             if viz_mode == 'distribution':
                 # Simple histogram
@@ -352,18 +359,22 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     if df[group].dtype.kind in 'fi':
                         # Continuous variable - use colorscale
                         colorscale = aesthetics['color'].get('colorscale', 'Viridis')
+                        _cont_mk = dict(
+                            color=group_vals,
+                            colorscale=colorscale,
+                            size=default_size,
+                            opacity=default_opacity,
+                            symbol=aesthetics['symbol'].get('default', 'circle'),
+                            showscale=False
+                        )
+                        _lc = line_color_map.get('default')
+                        if _lc:
+                            _cont_mk['line'] = dict(color=_lc, width=1)
                         fig.add_trace(go.Scatter(
                             x=time_vals,
                             y=jitter,
                             mode='markers',
-                            marker=dict(
-                                color=group_vals,
-                                colorscale=colorscale,
-                                size=default_size,
-                                opacity=default_opacity,
-                                symbol=aesthetics['symbol'].get('default', 'circle'),
-                                showscale=False
-                            ),
+                            marker=_cont_mk,
                             unselected=_unsel_marker,
                             customdata=time_ids,
                             hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
@@ -385,16 +396,20 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         for val in unique_vals:
                             mask = group_vals == val
                             subset_ids = [time_ids[i] for i in range(len(time_ids)) if mask.iloc[i]]
+                            _cat_mk = dict(
+                                color=color_map.get(str(val), default_color),
+                                size=size_map.get(str(val), default_size),
+                                opacity=opacity_map.get(str(val), default_opacity),
+                                symbol=symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle'))
+                            )
+                            _lc = line_color_map.get(str(val), line_color_map.get('default'))
+                            if _lc:
+                                _cat_mk['line'] = dict(color=_lc, width=1)
                             fig.add_trace(go.Scatter(
                                 x=time_vals[mask],
                                 y=jitter[mask.to_numpy()],
                                 mode='markers',
-                                marker=dict(
-                                    color=color_map.get(str(val), default_color),
-                                    size=size_map.get(str(val), default_size),
-                                    opacity=opacity_map.get(str(val), default_opacity),
-                                    symbol=symbol_map.get(str(val), aesthetics['symbol'].get('default', 'circle'))
-                                ),
+                                marker=_cat_mk,
                                 unselected=_unsel_marker,
                                 customdata=subset_ids,
                                 hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',
@@ -402,11 +417,15 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                                 showlegend=False
                             ))
                 else:
+                    _none_mk = dict(color=default_color, size=default_size, opacity=default_opacity)
+                    _lc = line_color_map.get('default')
+                    if _lc:
+                        _none_mk['line'] = dict(color=_lc, width=1)
                     fig.add_trace(go.Scatter(
                         x=time_vals,
                         y=jitter,
                         mode='markers',
-                        marker=dict(color=default_color, size=default_size, opacity=default_opacity),
+                        marker=_none_mk,
                         unselected=_unsel_marker,
                         customdata=time_ids,
                         hovertemplate='<b>ID:</b> %{customdata}<br><extra></extra>',

@@ -86,6 +86,14 @@ def merge_aesthetics(defaults, overrides):
             for key, val in overrides['symbol_map'].items():
                 result['symbol_map'][key] = val
 
+    # Merge line_color settings (values are hex strings or None)
+    if 'line_color' in overrides:
+        if isinstance(overrides['line_color'], dict):
+            if 'line_color' not in result:
+                result['line_color'] = {'default': None, 'unselected': None}
+            for key, val in overrides['line_color'].items():
+                result['line_color'][key] = val
+
     # Merge order (list)
     if 'order' in overrides and isinstance(overrides['order'], list):
         result['order'] = list(overrides['order'])
@@ -125,9 +133,13 @@ def get_init_aesthetics(args, group, df):
         'symbol_map': {
             'default': args.point_symbol if args.point_symbol in ['circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star'] else 'circle',
             'unselected': args.point_symbol_unselected if args.point_symbol_unselected in ['circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star'] else 'circle'
-        }
+        },
+        'line_color': {
+            'default': args.point_color,           # same as fill by default
+            'unselected': args.point_color_unselected,
+        },
     }
-    
+
     # Add color map for categorical variables
     if group != 'none' and group in df.columns:
         if df[group].dtype.kind in 'fi':
@@ -139,7 +151,9 @@ def get_init_aesthetics(args, group, df):
             px_colors = px.colors.qualitative.Plotly
             for i, val in enumerate(unique_values):
                 # Convert to string to ensure consistent key type
-                aesthetics['color'][str(val)] = px_colors[i % len(px_colors)]
+                fill = px_colors[i % len(px_colors)]
+                aesthetics['color'][str(val)] = fill
+                aesthetics['line_color'][str(val)] = fill   # same as fill by default
             aesthetics['order'] = [str(val) for val in unique_values]
 
     return aesthetics
@@ -168,7 +182,7 @@ def get_aesthetics_for_group(args, group, df, store_data):
     new_aest = get_init_aesthetics(args, group, df)
     ref = list(store_data.values())[-1]
     for key in ('default', 'unselected'):
-        for prop in ('size', 'opacity', 'symbol', 'symbol_map'):
+        for prop in ('size', 'opacity', 'symbol', 'symbol_map', 'line_color'):
             if key in ref.get(prop, {}):
                 new_aest[prop][key] = ref[prop][key]
         # Carry over default/unselected hex colours (skip colorscale and

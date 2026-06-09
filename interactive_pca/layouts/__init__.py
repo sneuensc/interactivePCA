@@ -98,13 +98,13 @@ def create_layout(args, df, pcs,
         # User guide section
         html.Div([
             html.H3('Interactive PCA Visualization - User Guide', style={'marginBottom': '20px'}),
-            
+
             html.H4('Overview', style={'marginTop': '20px'}),
             html.P([
                 'This application provides interactive visualization of Principal Component Analysis (PCA) results ',
                 'with support for geographical mapping, temporal data, and rich annotations.'
             ]),
-            
+
             html.H4('Key Features', style={'marginTop': '20px'}),
             html.Ul([
                 html.Li([html.Strong('PCA Plot: '), 'Visualize samples in PC space with 2D or 3D views. Select PC axes, group samples by variables, and use lasso/box selection.']),
@@ -112,7 +112,7 @@ def create_layout(args, df, pcs,
                 html.Li([html.Strong('Time Plot: '), 'Explore temporal distributions with scatter, histogram, or overlay views.']),
                 html.Li([html.Strong('Annotation Table: '), 'Browse and filter sample metadata. Select visible columns to customize hover information.']),
             ]),
-            
+
             html.H4('Interactive Plots', style={'marginTop': '20px'}),
             html.Ul([
                 html.Li([html.Strong('Group by: '), 'Color and group samples by any categorical or continuous variable.']),
@@ -121,7 +121,7 @@ def create_layout(args, df, pcs,
                 html.Li([html.Strong('3D toggle: '), 'Switch between 2D and 3D PCA views.']),
                 html.Li([html.Strong('Legend toggle: '), 'Show/hide legends.']),
             ]),
-            
+
             html.H4('Interactive Table', style={'marginTop': '20px'}),
             html.Ul([
                 html.Li([html.Strong('Select columns to display: '), 'Under the tab "Annotation" you can select the columns to be shown in the Annotation table.']),
@@ -141,13 +141,13 @@ def create_layout(args, df, pcs,
                 'The columns displayed in detailed mode match your selection in the Annotation table. ',
                 'Select/deselect rows to customize which metadata appears in hover tooltips.'
             ]),
-            
+
             html.H4('Aesthetics', style={'marginTop': '20px'}),
             html.P([
                 'Click "Aesthetics" in the PCA tab to customize colors, sizes, shapes, and opacity for each group value. ',
                 'For continuous variables, choose a color scale. For categorical variables, edit individual group aesthetics.'
             ]),
-            
+
             html.H4('Tips', style={'marginTop': '20px'}),
             html.Ul([
                 html.Li('Use lasso or box selection to highlight samples across all plots simultaneously.'),
@@ -156,7 +156,7 @@ def create_layout(args, df, pcs,
                 html.Li('Customize hover information by selecting specific annotation columns in the table.'),
                 html.Li('Save aesthetic configurations to a JSON file for reuse with --aesthetics-file.'),
             ]),
-            
+
         ], style={
             'backgroundColor': 'white',
             'padding': '20px',

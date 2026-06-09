@@ -294,6 +294,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 rows.append({
                     'Group': key,
                     'color': aesthetics['color'].get(key, '#cccccc'),
+                    'line_color': aesthetics.get('line_color', {}).get(key),
                     'Size': size_display,
                     'Opacity': opacity_display,
                     'Symbol': symbol_display
@@ -316,6 +317,14 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     'cellRenderer': 'ColorPickerRenderer',
                     'editable': False,
                     'width': 80,
+                    'suppressSizeToFit': True,
+                },
+                {
+                    'field': 'line_color',
+                    'headerName': 'Line',
+                    'cellRenderer': 'LineColorRenderer',
+                    'editable': False,
+                    'width': 70,
                     'suppressSizeToFit': True,
                 },
                 {
@@ -472,18 +481,30 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                         if 'symbol_map' in group_aesthetics:
                             group_aesthetics['symbol_map'][key] = symbol_val
         else:
-            # For categorical, update colors from grid Color column (virtualRowData)
+            # For categorical, update colors and line colors from grid columns
             if row_data:
                 for row in row_data:
                     key = row.get('Group')
+                    if not key:
+                        continue
+                    # Resolve type-coerced key
+                    def _resolve_key(k, d):
+                        if k in d:
+                            return k
+                        for ek in d:
+                            if str(ek) == str(k):
+                                return ek
+                        return k
                     color_val = row.get('color')
-                    if key and color_val:
-                        if key not in group_aesthetics['color']:
-                            for existing_key in group_aesthetics['color'].keys():
-                                if str(existing_key) == str(key):
-                                    key = existing_key
-                                    break
-                        group_aesthetics['color'][key] = color_val
+                    if color_val:
+                        rk = _resolve_key(key, group_aesthetics['color'])
+                        group_aesthetics['color'][rk] = color_val
+                    # line_color: None means no line, hex string means visible border
+                    lc_val = row.get('line_color')  # may be None or a hex string
+                    if 'line_color' not in group_aesthetics:
+                        group_aesthetics['line_color'] = {}
+                    rk = _resolve_key(key, group_aesthetics['line_color'])
+                    group_aesthetics['line_color'][rk] = lc_val if lc_val else None
 
             # Update size/opacity/symbol from AG Grid virtualRowData
             # Process 'default' row first to get the new default values
@@ -614,7 +635,8 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 'size': {},
                 'opacity': {},
                 'symbol': {},
-                'symbol_map': {}
+                'symbol_map': {},
+                'line_color': {}
             }
             
             # Always include defaults and unselected
@@ -665,7 +687,24 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     # Include symbol_map if present
                     if key in group_data.get('symbol_map', {}):
                         filtered_group['symbol_map'][key] = group_data['symbol_map'][key]
-            
+
+                    # Include line_color only when it differs from the fill colour
+                    lc = group_data.get('line_color', {}).get(key)
+                    fc = group_data['color'].get(key)
+                    if lc and lc != fc:
+                        filtered_group['line_color'][key] = lc
+                        has_non_default = True
+
+            # Export line_color for default/unselected only when it differs from fill
+            for key in ('default', 'unselected'):
+                lc = group_data.get('line_color', {}).get(key)
+                fc = group_data['color'].get(key)
+                if lc and lc != fc:
+                    filtered_group['line_color'][key] = lc
+
+            if not filtered_group['line_color']:
+                del filtered_group['line_color']
+
             if 'order' in group_data:
                 filtered_group['order'] = group_data['order']
 
