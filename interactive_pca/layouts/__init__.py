@@ -740,6 +740,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             rowData=table_data,
             columnDefs=column_defs,
             defaultColDef={'resizable': True, 'sortable': True, 'filter': True},
+            getRowId={'function': 'params.data.id'},
             dashGridOptions={
                 'pagination': True,
                 'paginationPageSize': 20,

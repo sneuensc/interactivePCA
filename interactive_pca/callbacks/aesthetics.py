@@ -411,7 +411,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             if not dual_mode:
                 return color_table
 
-            # ── Dual mode: also build the Pattern (symbol-only) tab ───────────
+            # ── Dual mode: also build the Shape (symbol-only) tab ───────────
             sym_aest = (symbol_store or {}).get(group_symbol, {})
             if group_symbol in df.columns and df[group_symbol].dtype.kind not in 'fi':
                 sym_unique = df[group_symbol].dropna().unique()
@@ -448,12 +448,12 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                     value='color',
                     children=[
                         dcc.Tab(label='Color',   value='color',   style=tab_style, selected_style=tab_sel),
-                        dcc.Tab(label='Pattern', value='pattern', style=tab_style, selected_style=tab_sel),
+                        dcc.Tab(label='Shape', value='shape', style=tab_style, selected_style=tab_sel),
                     ],
                     style={'flex': '0 0 auto', 'marginBottom': '6px'}
                 ),
                 html.Div(color_table,   id='aest-color-content'),
-                html.Div(pattern_table, id='aest-pattern-content', style={'display': 'none'}),
+                html.Div(pattern_table, id='aest-shape-content', style={'display': 'none'}),
             ], style={'display': 'flex', 'flexDirection': 'column'})
             
         except Exception as e:
@@ -483,23 +483,23 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             return updated
         return dash.no_update
 
-    # Toggle Color / Pattern tab content visibility
+    # Toggle Color / Shape tab content visibility
     app.clientside_callback(
         """
         function(active) {
             var NO = window.dash_clientside.no_update;
             if (!active) return [NO, NO];
             var showColor   = active === 'color'   ? 'block' : 'none';
-            var showPattern = active === 'pattern' ? 'block' : 'none';
+            var showShape = active === 'shape' ? 'block' : 'none';
             var c = document.getElementById('aest-color-content');
-            var p = document.getElementById('aest-pattern-content');
+            var s = document.getElementById('aest-shape-content');
             if (c) c.style.display = showColor;
-            if (p) p.style.display = showPattern;
+            if (s) s.style.display = showShape;
             return [NO, NO];
         }
         """,
         Output('aest-color-content',   'style', allow_duplicate=True),
-        Output('aest-pattern-content', 'style', allow_duplicate=True),
+        Output('aest-shape-content', 'style', allow_duplicate=True),
         Input('aest-mode-tabs', 'value'),
         prevent_initial_call=True,
     )
@@ -698,7 +698,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
         aesthetics_store[group] = group_aesthetics
         logging.info(f"Aesthetics saved for group '{group}'")
 
-        # Update symbol-aesthetics-store from Pattern tab (dual mode only)
+        # Update symbol-aesthetics-store from Shape tab (dual mode only)
         new_symbol_store = dash.no_update
         if group_symbol and group_symbol != 'none' and symbol_row_data:
             sym_map = {row['Group']: row.get('Symbol', 'circle')

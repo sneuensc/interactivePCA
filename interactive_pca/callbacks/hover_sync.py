@@ -237,6 +237,29 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
             }}
         }}
 
+        // ── expose helpers globally + attach table hover listeners (once) ──────
+        // `getRowId` on pca-annotation-table ensures each AG Grid row DOM element
+        // carries row-id="<sample_id>", so plain mouseover can resolve the ID.
+        window._hvUpdate = function(id) {{
+            if (id) {{
+                allPlotIds.forEach(function(pid) {{ updateHighlight(pid, id); }});
+            }} else {{
+                allPlotIds.forEach(function(pid) {{ clearHighlight(pid); }});
+            }}
+        }};
+        (function() {{
+            var tbl = document.getElementById('pca-annotation-table');
+            if (!tbl || tbl._hvHooked) return;
+            tbl._hvHooked = true;
+            tbl.addEventListener('mouseover', function(e) {{
+                var row = e.target.closest('.ag-row[row-id]');
+                if (!row) return;
+                var rowId = row.getAttribute('row-id');
+                if (rowId && rowId !== 'undefined') window._hvUpdate(rowId);
+            }});
+            tbl.addEventListener('mouseleave', function() {{ window._hvUpdate(null); }});
+        }})();
+
         // ── main ─────────────────────────────────────────────────────────────
 
         if (!hoverData || !hoverData.points || !hoverData.points.length) {{

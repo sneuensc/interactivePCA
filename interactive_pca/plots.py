@@ -90,22 +90,33 @@ def build_symbol_legend_traces(group_symbol, symbol_aest, default_size=8, trace_
     """
     entries = [(k, v) for k, v in symbol_aest.items() if k != 'default']
     result = []
-    for i, (sym_val, sym_name) in enumerate(entries):
+    # Title row — zero-size invisible marker, name = variable label
+    title_trace = {
+        'type': trace_type,
+        'mode': 'markers',
+        'marker': {'size': 0, 'color': 'rgba(0,0,0,0)', 'symbol': 'circle'},
+        'name': f'<b>{group_symbol}</b>',
+        'showlegend': True,
+        'hovertemplate': '<extra></extra>',
+    }
+    if trace_type == 'scatter3d':
+        title_trace['x'] = [None]; title_trace['y'] = [None]; title_trace['z'] = [None]
+    else:
+        title_trace['x'] = [None]; title_trace['y'] = [None]
+    result.append(title_trace)
+    for sym_val, sym_name in entries:
         trace = {
             'type': trace_type,
             'mode': 'markers',
             'marker': {'size': default_size, 'color': '#888888', 'symbol': sym_name},
-            'name': str(sym_val),
-            'legendgroup': '__shape__',
+            'name': f'  {sym_val}',
             'showlegend': True,
             'hovertemplate': '<extra></extra>',
         }
         if trace_type == 'scatter3d':
-            trace['x'] = []; trace['y'] = []; trace['z'] = []
+            trace['x'] = [None]; trace['y'] = [None]; trace['z'] = [None]
         else:
-            trace['x'] = []; trace['y'] = []
-        if i == 0:
-            trace['legendgrouptitle'] = {'text': group_symbol}
+            trace['x'] = [None]; trace['y'] = [None]
         result.append(trace)
     return result
 
@@ -419,6 +430,11 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
         Uses global _df DataFrame.
     """
     aesthetics_group = tuple_to_dict_of_dicts(aesthetics_tuple)
+    # Note: Scattermap has very limited symbol support; shape grouping is not
+    # applied on the map — colour is the only reliable visual channel there.
+    def _mk_map(g, df_sub):
+        return get_marker_dict(g, aesthetics_group, df_subset=df_map, mapplot=True)
+
     traces = []
 
     if lat_col is None or lon_col is None or lat_col not in _df.columns or lon_col not in _df.columns:
@@ -428,23 +444,23 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
             showarrow=False,
             font={'size': 20}
         )
-    
+
     # Remove rows with missing coordinates
     df_map = _df.dropna(subset=[lat_col, lon_col])
-    
+
     if df_map.empty:
         return go.Figure().add_annotation(
             text="No valid geographic coordinates found",
             showarrow=False,
             font={'size': 20}
         )
-    
+
     if group == 'none':
         traces.append(go.Scattermap(
             lat=df_map[lat_col],
             lon=df_map[lon_col],
             mode='markers',
-            marker=get_marker_dict(group, aesthetics_group, df_subset=df_map, mapplot=True),
+            marker=_mk_map('none', df_map),
             unselected=dict(marker=get_marker_dict(group, aesthetics_group, unselected=True, mapplot=True)),
             name=group,
             customdata=df_map['id'],
@@ -471,7 +487,7 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
                 lat=group_df[lat_col],
                 lon=group_df[lon_col],
                 mode='markers',
-                marker=get_marker_dict(g, aesthetics_group, df_subset=df_map, mapplot=True),
+                marker=_mk_map(g, group_df),
                 unselected=dict(marker=get_marker_dict(g, aesthetics_group, unselected=True, mapplot=True)),
                 name=str(g),
                 customdata=group_df['id'],

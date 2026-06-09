@@ -215,13 +215,17 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
         fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca', group_symbol=gs)
 
-        # Symbol-group legend — prepend empty dummy traces so that with
-        # traceorder='reversed' they appear at the BOTTOM of the legend.
-        if gs and sym_aest and show_legend:
+        # Symbol-group legend — prepend so that with traceorder='reversed'
+        # they appear at the bottom (colour group at the top).
+        if gs and sym_aest:
             _t = 'scatter3d' if 'enable_3d' in is_3d else ('scattergl' if len(df) > 3000 else 'scatter')
             _sz = aesthetics.get('size', {}).get('default', 8)
             sym_entries = build_symbol_legend_traces(gs, sym_aest, default_size=_sz, trace_type=_t)
             fig_dict['data'] = sym_entries + list(fig_dict['data'])
+            try:
+                fig_dict['layout']['legend']['visible'] = True
+            except (KeyError, TypeError):
+                pass
 
         # Determine what triggered this callback.
         # For aesthetics/legend-only changes the structural layout is unchanged,
@@ -404,6 +408,9 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         _lc = line_color_map.get('default')
                         if _lc:
                             _cont_mk['line'] = dict(color=_lc, width=1)
+                        if gs and sym_aest and gs in df.columns:
+                            _cont_mk['symbol'] = [sym_aest.get(str(v), sym_aest.get('default', 'circle'))
+                                                  for v in df.loc[time_vals.index, gs]]
                         fig.add_trace(go.Scatter(
                             x=time_vals,
                             y=jitter,
@@ -460,12 +467,15 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                                 showlegend=False
                             ))
                 else:
-                    # No grouping — single strip
+                    # No grouping — single strip (per-point symbols from shape group if active)
                     jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
                     _none_mk = dict(color=default_color, size=default_size, opacity=default_opacity)
                     _lc = line_color_map.get('default')
                     if _lc:
                         _none_mk['line'] = dict(color=_lc, width=1)
+                    if gs and sym_aest and gs in df.columns:
+                        _none_mk['symbol'] = [sym_aest.get(str(v), sym_aest.get('default', 'circle'))
+                                               for v in df.loc[time_vals.index, gs]]
                     fig.add_trace(go.Scatter(
                         x=time_vals,
                         y=jitter,
