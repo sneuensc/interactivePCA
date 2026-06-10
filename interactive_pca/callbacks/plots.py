@@ -70,17 +70,19 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         Input('pca-legend-toggle', 'value'),   # promoted from State so auto_set_legend is seen immediately
         Input('dropdown-group-symbol', 'value'),
         Input('symbol-aesthetics-store', 'data'),
+        Input('save-trigger-store', 'data'),
         State('effective-hover-detailed', 'data'),
         State('selected-annotation-columns', 'data'),
         State('selection-store', 'data'),
         prevent_initial_call=False
     )
     def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, legend_toggle,
-                                   group_symbol, symbol_store, hover_detailed, selected_cols, selected_ids):
+                                   group_symbol, symbol_store, _save_tick,
+                                   hover_detailed, selected_cols, selected_ids):
         """Regenerate PCA figure when any structural or aesthetic parameter changes."""
         import json
         from dash import callback_context
-        
+
         # Get current aesthetics
         aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
         aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
@@ -169,11 +171,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         dual_legend = bool(gs and sym_aest)
         _r_margin = 180 if (is_categorical and show_legend and dual_legend) else \
                     140 if (is_categorical and show_legend) else 20
+        _axis_fmt = dict(exponentformat='power', showexponent='all')
         if 'enable_3d' not in is_3d:
             fig.update_layout(
                 autosize=True,
                 uirevision=uirev,
                 margin=dict(l=50, r=_r_margin, t=40, b=40),
+                xaxis=_axis_fmt,
+                yaxis=_axis_fmt,
                 legend=dict(
                     visible=show_legend,
                     x=1.02 if is_categorical else 0.02,
@@ -274,11 +279,12 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('marker-aesthetics-store', 'data'),
             Input('dropdown-group-symbol', 'value'),
             Input('symbol-aesthetics-store', 'data'),
+            Input('save-trigger-store', 'data'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             State('selection-store', 'data'),
         )
-        def update_map_plot(group, aesthetics_store, group_symbol, symbol_store,
+        def update_map_plot(group, aesthetics_store, group_symbol, symbol_store, _save_tick,
                             hover_detailed, selected_cols, selection_store):
             if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
                 return {}
@@ -348,12 +354,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('marker-aesthetics-store', 'data'),
             Input('dropdown-group-symbol', 'value'),
             Input('symbol-aesthetics-store', 'data'),
+            Input('save-trigger-store', 'data'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             prevent_initial_call=False
         )
         def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store,
-                                   group_symbol, symbol_store, hover_detailed, selected_cols):
+                                   group_symbol, symbol_store, _save_tick,
+                                   hover_detailed, selected_cols):
             if time_variable is None or time_variable not in df.columns:
                 return {}
 

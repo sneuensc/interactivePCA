@@ -126,9 +126,11 @@ def update_figure_hover_templates(fig, df, annotation_desc, group=None, detailed
         # Match hover texts to this trace's customdata (IDs)
         trace_hover_texts = [id_to_hover.get(cdata, f"<b>ID:</b> {cdata}") for cdata in customdata]
         
-        # Set hovertext and override hovertemplate
+        # Store hover text and drive it via hovertemplate only.
+        # Do NOT set hoverinfo='text' — that causes Plotly to bypass
+        # hovertemplate and render hovertext directly, which prevents
+        # the temporary minTpl override in hover_sync from taking effect.
         trace['hovertext'] = trace_hover_texts
-        trace['hoverinfo'] = 'text'
         trace['hovertemplate'] = '%{hovertext}<extra></extra>'
     
     # Add consistent hoverlabel styling to all plots

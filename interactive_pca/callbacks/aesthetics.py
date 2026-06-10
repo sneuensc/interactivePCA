@@ -38,6 +38,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
     )
     def toggle_aesthetics_modal(n_open, n_cancel, n_save, is_open):
         """Toggle modal on open, cancel, or after save"""
+        #print(f"toggle_aesthetics_modal called with n_open={n_open}, n_cancel={n_cancel}, n_save={n_save}, is_open={is_open}")
         if n_open or n_cancel or n_save:
             return not is_open
         return is_open
@@ -78,10 +79,46 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             
             if not group or aesthetics_store is None:
                 return html.Div("No data available", style={'color': '#999', 'padding': '12px'})
-            
-            aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
 
-            dual_mode = bool(group_symbol and group_symbol != 'none')
+            has_color = group != 'none'
+            has_shape = bool(group_symbol and group_symbol != 'none')
+
+            # Shape-only mode: no colour group, only shape group
+            if not has_color and has_shape:
+                sym_aest = (symbol_store or {}).get(group_symbol, {})
+                if group_symbol in df.columns and df[group_symbol].dtype.kind not in 'fi':
+                    sym_unique = df[group_symbol].dropna().unique()
+                    sym_rows = [{'Group': str(v), 'Symbol': sym_aest.get(str(v), 'circle')}
+                                for v in sym_unique]
+                else:
+                    sym_rows = []
+                sym_col_defs = [
+                    {'field': 'Group', 'headerName': 'Group', 'editable': False, 'flex': 1},
+                    {
+                        'field': 'Symbol', 'headerName': 'Symbol', 'editable': True,
+                        'width': 150, 'suppressSizeToFit': True, 'singleClickEdit': True,
+                        'cellEditor': 'agSelectCellEditor',
+                        'cellEditorParams': {'values': ['circle', 'square', 'diamond', 'cross',
+                                                        'triangle-up', 'triangle-down', 'star']}
+                    }
+                ]
+                return html.Div([
+                    dag.AgGrid(
+                        id='symbol-edit-table',
+                        rowData=sym_rows,
+                        columnDefs=sym_col_defs,
+                        defaultColDef={'resizable': True},
+                        dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40},
+                        style={'height': '350px', 'width': '100%',
+                               'border': '1px solid #dee2e6', 'borderRadius': '4px', 'overflow': 'hidden'}
+                    ),
+                    dag.AgGrid(id='aesthetics-edit-table', rowData=[], columnDefs=[],
+                               style={'display': 'none'}),
+                ])
+
+            # Colour group is active (may also have shape group → dual mode)
+            dual_mode = bool(has_color and has_shape)
+            aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
 
             # Determine if group is continuous
             is_continuous = group != 'none' and group in df.columns and df[group].dtype.kind in 'fi'
@@ -408,8 +445,15 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 }
             )
 
+            # Always include symbol-edit-table (hidden when not needed) so that
+            # State('symbol-edit-table', 'rowData') in save_aesthetics_edits is
+            # always resolvable — a missing State silently blocks the callback.
+            _empty_sym_table = dag.AgGrid(
+                id='symbol-edit-table', rowData=[], columnDefs=[],
+                style={'display': 'none'}
+            )
             if not dual_mode:
-                return color_table
+                return html.Div([color_table, _empty_sym_table])
 
             # ── Dual mode: also build the Shape (symbol-only) tab ───────────
             sym_aest = (symbol_store or {}).get(group_symbol, {})
@@ -455,7 +499,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 html.Div(color_table,   id='aest-color-content'),
                 html.Div(pattern_table, id='aest-shape-content', style={'display': 'none'}),
             ], style={'display': 'flex', 'flexDirection': 'column'})
-            
+
         except Exception as e:
             logging.error(f"Error in update_aesthetics_table: {e}", exc_info=True)
             return html.Div(
@@ -508,6 +552,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
     @app.callback(
         Output('marker-aesthetics-store', 'data'),
         Output('symbol-aesthetics-store', 'data', allow_duplicate=True),
+        Output('save-trigger-store', 'data'),
         [Input('save-aesthetics', 'n_clicks')],
         [
             State('marker-aesthetics-store', 'data'),
@@ -526,16 +571,42 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
     def save_aesthetics_edits(n_clicks, aesthetics_store, symbol_store, group, group_symbol,
                               color_values, color_ids, row_data, virtual_row_data, symbol_row_data,
                               colorscale_values):
-        """Save aesthetics edits to store when Save button is clicked"""
-        if not n_clicks or not aesthetics_store or not group:
-            raise dash.exceptions.PreventUpdate
         
-        # Get current group aesthetics
+        print(f"save_aesthetics_edits called with n_clicks={n_clicks}, group={group}, group_symbol={group_symbol}")
+        
+        """Save aesthetics edits to store when Save button is clicked"""
+        has_color = bool(group and group != 'none')
+        has_shape = bool(group_symbol and group_symbol != 'none')
+        if not n_clicks or not aesthetics_store:
+            raise dash.exceptions.PreventUpdate
+
+        # Deep-copy so the returned object is always a new value; this ensures
+        # Dash detects the change even if only nested values were modified.
+        import copy
+        aesthetics_store = copy.deepcopy(aesthetics_store)
+
+        # Cell values (color, size, opacity, symbol) are read from rowData —
+        # it is updated synchronously on every cell edit.
+        # virtualRowData only tracks row ORDER (drag-and-drop) and is NOT
+        # reliably updated on cell value changes, so it must not be used here.
+
+        # Shape-only mode: only save symbols to symbol-aesthetics-store
+        if not has_color and has_shape:
+            new_symbol_store = dict(symbol_store or {})
+            if symbol_row_data:
+                new_symbol_store[group_symbol] = {
+                    row['Group']: row.get('Symbol', 'circle')
+                    for row in symbol_row_data
+                    if row.get('Group') and row.get('Symbol')
+                }
+            return aesthetics_store, new_symbol_store, int(n_clicks or 0)
+
+        # Colour group is active — get current group aesthetics
         if group not in aesthetics_store:
             group_aesthetics = get_init_aesthetics(args, group, df)
         else:
-            group_aesthetics = aesthetics_store[group]
-        
+            group_aesthetics = copy.deepcopy(aesthetics_store[group])
+
         # Check if continuous (colorscale only)
         is_continuous = group != 'none' and group in df.columns and df[group].dtype.kind in 'fi'
         
@@ -685,8 +756,6 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                         group_aesthetics['symbol'][key] = symbol_val
         
         # Save plotting order from virtualRowData (reflects drag-and-drop sequence).
-        # Cell values are read from rowData which is more reliably synced after
-        # in-cell edits (e.g. ColorPickerRenderer setDataValue).
         order_source = virtual_row_data or row_data
         if not is_continuous and order_source:
             group_aesthetics['order'] = [
@@ -694,7 +763,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 if row.get('Group') not in ('default', 'unselected')
             ]
 
-        # Update color/size/opacity store
+        # Update marker-aesthetics-store
         aesthetics_store[group] = group_aesthetics
         logging.info(f"Aesthetics saved for group '{group}'")
 
@@ -708,7 +777,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             updated_sym[group_symbol] = sym_map
             new_symbol_store = updated_sym
 
-        return aesthetics_store, new_symbol_store
+        return aesthetics_store, new_symbol_store, int(n_clicks or 0)
     
     # Keep default/unselected rows pinned at the top if a drag displaced them
     @app.callback(
@@ -720,7 +789,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
         if not virtual_row_data:
             raise dash.exceptions.PreventUpdate
         fixed = {'default', 'unselected'}
-        top2 = {r['Group'] for r in virtual_row_data[:2]}
+        top2 = {r.get('Group') for r in virtual_row_data[:2]}
         if fixed.issubset(top2):
             raise dash.exceptions.PreventUpdate  # already correct
         fixed_rows = [r for r in virtual_row_data if r.get('Group') in fixed]

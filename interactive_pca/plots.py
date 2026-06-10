@@ -504,7 +504,9 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
 
     fig = go.Figure(traces)
 
-    # Auto-zoom/center to data bounds
+    # Auto-zoom/center to data bounds.
+    # Mercator correction: 1 degree of latitude ≈ 1/cos(lat) degrees of
+    # longitude on screen, so we normalise the lat range before picking zoom.
     import math as _math
     lats = df_map[lat_col].dropna()
     lons = df_map[lon_col].dropna()
@@ -513,8 +515,9 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
         center_lon = float(lons.mean())
         lat_range = max(float(lats.max() - lats.min()), 0.01)
         lon_range = max(float(lons.max() - lons.min()), 0.01)
-        max_range = max(lat_range, lon_range)
-        zoom = max(1, min(13, _math.floor(_math.log2(360 / max_range)) - 1))
+        lat_factor = max(abs(_math.cos(_math.radians(center_lat))), 0.01)
+        max_range = max(lon_range, lat_range / lat_factor)
+        zoom = max(1, min(13, round(_math.log2(360 / max_range))))
         fig.update_layout(map=dict(center=dict(lat=center_lat, lon=center_lon), zoom=zoom))
 
     return fig

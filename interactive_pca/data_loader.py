@@ -42,10 +42,6 @@ def load_eigenvec(filepath, id_column=None):
     
     logging.info(f"   Found {len(pcs)} principal components ({', '.join(pcs[:2])}, ...).")
     
-    # Scale PC columns (standard for PLINK output)
-    nb_snp = 194926  # Number of SNPs - this should be configurable
-    eigenvec[pcs] = eigenvec[pcs].div(nb_snp)
-    
     logging.info(f"Reading eigenvec file '{filepath}' ... done.")
     return eigenvec, pcs, "id"
 

@@ -241,7 +241,8 @@ def create_layout(args, df, pcs,
         dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
         dcc.Store(id='hover-sync-dummy', data=None),  # Dummy output for hover-sync clientside callback
         dcc.Store(id='hidden-groups-store', data={}),  # Group values hidden via legend click
-        dcc.Store(id='symbol-aesthetics-store', data={}),  # Symbol mappings for second group
+        dcc.Store(id='symbol-aesthetics-store', data={}),  # Symbol mappings for shape group
+        dcc.Store(id='save-trigger-store', data=0),       # Incremented on every aesthetics save
         dcc.Store(id='right-panel-tabs-dummy', data=None),  # Dummy output for right-panel tab switching
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         dcc.Download(id='download-snapshot'),
