@@ -212,10 +212,6 @@ def merge_data(eigenvec, annotation, eigenvec_id_col='id', annotation_id_col=Non
         if invert_time and time_col is not None and time_col in df.columns:
             df[time_col] = -df[time_col]
 
-        ## filter for Politcal_Entit == 'Greece'
-        if 'Political_Entit' in df.columns:
-            df = df[df['Political_Entit'] == 'Greece']
-
     else:
         df = eigenvec.copy()
     
