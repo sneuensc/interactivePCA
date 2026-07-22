@@ -14,6 +14,10 @@ from .utils import dict_of_dicts_to_tuple, tuple_to_dict_of_dicts
 # Global DataFrame - set once at app initialization
 _df = None
 
+# Ocean colour for the Scattergeo basemap; also used as the figure background
+# so the conformal-projection letterbox margins read as sea (see below).
+_MAP_OCEAN_COLOR = 'rgb(220, 235, 250)'
+
 
 def _to_rgba(color: str, opacity: float) -> str:
     """Return an rgba() string that encodes *opacity* into *color*.
@@ -612,24 +616,33 @@ def generate_map_fig_scattergeo(group, aesthetics_tuple, legend=True, lat_col=No
 
     fig = go.Figure(traces)
 
+    # Equirectangular maps longitude->x and latitude->y linearly, so the axis
+    # ranges are plain lat/lon degrees and the pane-fill logic (in app.py) is a
+    # simple linear extension of the non-binding axis.
     geo = dict(
-        projection_type='natural earth',
+        projection_type='equirectangular',
         showland=True, landcolor='rgb(243, 243, 243)',
-        showocean=True, oceancolor='rgb(220, 235, 250)',
+        showocean=True, oceancolor=_MAP_OCEAN_COLOR,
         showcoastlines=True, coastlinecolor='rgb(204, 204, 204)',
         showcountries=True, countrycolor='rgb(210, 210, 210)', countrywidth=0.5,
         showframe=False, bgcolor='rgba(0,0,0,0)',
     )
-    # Fit the view to the data bounds (with a small margin).
+    # Fit the view to the full sample range (min/max, with a small margin) so
+    # every sample is visible at startup. The pane-fill in app.py then extends
+    # whichever axis has slack to fill the white space without cropping any point.
     lats = df_map[lat_col].dropna()
     lons = df_map[lon_col].dropna()
     if not lats.empty:
-        pad_lat = max(float(lats.max() - lats.min()) * 0.08, 1.0)
-        pad_lon = max(float(lons.max() - lons.min()) * 0.08, 1.0)
-        geo['lataxis'] = dict(range=[float(lats.min()) - pad_lat, float(lats.max()) + pad_lat])
-        geo['lonaxis'] = dict(range=[float(lons.min()) - pad_lon, float(lons.max()) + pad_lon])
-        geo['center'] = dict(lat=float(lats.mean()), lon=float(lons.mean()))
-    fig.update_layout(geo=geo)
+        lat_lo, lat_hi = float(lats.min()), float(lats.max())
+        lon_lo, lon_hi = float(lons.min()), float(lons.max())
+        pad_lat = max((lat_hi - lat_lo) * 0.05, 0.5)
+        pad_lon = max((lon_hi - lon_lo) * 0.05, 0.5)
+        geo['lataxis'] = dict(range=[lat_lo - pad_lat, lat_hi + pad_lat])
+        geo['lonaxis'] = dict(range=[lon_lo - pad_lon, lon_hi + pad_lon])
+    # Plotly centres the map within the pane and letterboxes when the projected
+    # aspect differs from the pane. Paint the figure background the ocean colour
+    # so the momentary margins (before the fill runs) read as sea.
+    fig.update_layout(geo=geo, paper_bgcolor=_MAP_OCEAN_COLOR, plot_bgcolor=_MAP_OCEAN_COLOR)
     return fig
 
 

@@ -12,7 +12,7 @@ Handles callbacks for:
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, State
+from dash import Input, Output, State, callback_context
 
 from ..plots import (
     generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map,
@@ -330,9 +330,10 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             State('selection-store', 'data'),
+            State('map-view-store', 'data'),
         )
         def update_map_plot(group, aesthetics_store, group_symbol, symbol_store, _save_tick,
-                            map_type, hover_detailed, selected_cols, selection_store):
+                            map_type, hover_detailed, selected_cols, selection_store, map_view):
             if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
                 return {}
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
@@ -389,6 +390,28 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         customdata_str = np.array([str(cd) for cd in customdata])
                         mask = np.isin(customdata_str, list(selected_set))
                         trace['selectedpoints'] = np.where(mask)[0].tolist()
+
+            # When the basemap was toggled, carry over the current geographic
+            # view (a lon/lat bounding box) instead of refitting to the data,
+            # so the scale/centre stays put across the switch. Other triggers
+            # keep the data-fit default.
+            triggered = {t['prop_id'].split('.')[0] for t in callback_context.triggered}
+            if 'map-type-toggle' in triggered and map_view:
+                lon0, lat0 = map_view.get('lon0'), map_view.get('lat0')
+                lon1, lat1 = map_view.get('lon1'), map_view.get('lat1')
+                if None not in (lon0, lat0, lon1, lat1):
+                    if use_tiles:
+                        import math
+                        span = max(abs(lon1 - lon0), 0.01)
+                        m = fig_dict['layout'].setdefault('map', {})
+                        m['center'] = {'lon': (lon0 + lon1) / 2, 'lat': (lat0 + lat1) / 2}
+                        m['zoom'] = math.log2(360 / span)
+                    else:
+                        g = fig_dict['layout'].setdefault('geo', {})
+                        # Disable auto-fit so the preserved ranges take effect.
+                        g['fitbounds'] = False
+                        g['lonaxis'] = {**(g.get('lonaxis') or {}), 'range': [lon0, lon1]}
+                        g['lataxis'] = {**(g.get('lataxis') or {}), 'range': [lat0, lat1]}
 
             return fig_dict
 
