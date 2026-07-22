@@ -284,8 +284,24 @@ def create_app(args):
                     var el = document.getElementById('pca-map-plot');
                     if (!el) return NO_UPDATE;
                     var div = el.data ? el : (el.querySelector && el.querySelector('.js-plotly-plot'));
-                    if (!div || !div._fullLayout || !div._fullLayout.map ||
-                        !div._fullLayout.map._subplot) return NO_UPDATE;
+                    if (!div || !div._fullLayout) return NO_UPDATE;
+
+                    // Plotly.react cannot reliably switch a graph between the
+                    // 'map' (MapLibre) and 'geo' subplot systems in place, so the
+                    // basemap toggle sometimes leaves the old subplot rendered.
+                    // Detect that mismatch and force a clean redraw.
+                    if (_fig && _fig.data) {
+                        var wantGeo = _fig.data.some(function(t) { return t.type === 'scattergeo'; });
+                        var wantMap = _fig.data.some(function(t) {
+                            return t.type === 'scattermap' || t.type === 'scattermapbox'; });
+                        var haveGeo = !!div._fullLayout.geo;
+                        var haveMap = !!div._fullLayout.map;
+                        if ((wantGeo && !haveGeo) || (wantMap && !haveMap)) {
+                            Plotly.newPlot(div, _fig.data, _fig.layout, _fig.config || {});
+                        }
+                    }
+
+                    if (!div._fullLayout.map || !div._fullLayout.map._subplot) return NO_UPDATE;
                     var map = div._fullLayout.map._subplot.map;
                     if (!map || !map.addImage) return NO_UPDATE;
 
@@ -348,6 +364,153 @@ def create_app(args):
             Output('hover-sync-dummy', 'data', allow_duplicate=True),
             Input('pca-map-plot', 'figure'),
             prevent_initial_call='initial_duplicate',
+        )
+
+        # Capture the live map view as a lon/lat bounding box whenever it
+        # changes, so it can be re-applied to the other basemap on toggle.
+        # Tiles read the true visible bounds from the MapLibre map; geo reads
+        # its axis ranges. A bounding box maps cleanly onto both basemaps
+        # (geo axis ranges fill the pane; tiles centre + zoom).
+        app.clientside_callback(
+            """
+            function(_relayout) {
+                var NO_UPDATE = window.dash_clientside.no_update;
+                try {
+                    var el = document.getElementById('pca-map-plot');
+                    if (!el) return NO_UPDATE;
+                    var d = el.data ? el : (el.querySelector && el.querySelector('.js-plotly-plot'));
+                    if (!d || !d._fullLayout) return NO_UPDATE;
+                    var fl = d._fullLayout;
+                    if (fl.map) {
+                        var mb = fl.map._subplot && fl.map._subplot.map;
+                        if (mb && mb.getBounds) {
+                            var b = mb.getBounds();
+                            return {lon0: b.getWest(), lat0: b.getSouth(),
+                                    lon1: b.getEast(), lat1: b.getNorth()};
+                        }
+                        if (fl.map.center) {  // fallback from centre + zoom
+                            var span = 360 / Math.pow(2, fl.map.zoom || 1);
+                            return {lon0: fl.map.center.lon - span / 2, lon1: fl.map.center.lon + span / 2,
+                                    lat0: fl.map.center.lat - span / 4, lat1: fl.map.center.lat + span / 4};
+                        }
+                    }
+                    if (fl.geo) {
+                        var lonR = fl.geo.lonaxis && fl.geo.lonaxis.range;
+                        var latR = fl.geo.lataxis && fl.geo.lataxis.range;
+                        if (lonR && latR) {
+                            return {lon0: lonR[0], lat0: latR[0], lon1: lonR[1], lat1: latR[1]};
+                        }
+                    }
+                } catch (err) { /* ignore */ }
+                return NO_UPDATE;
+            }
+            """,
+            Output('map-view-store', 'data'),
+            Input('pca-map-plot', 'relayoutData'),
+            prevent_initial_call=True,
+        )
+
+        # Fill the geo pane (scattergeo only). Equirectangular maps lon/lat
+        # linearly, so a data range whose aspect (lonSpan/latSpan in degrees)
+        # differs from the pane makes Plotly centre the map and letterbox.
+        # Standard fit-bounds rule: keep the binding axis at the data range and
+        # EXTEND the other so lonSpan/latSpan matches the pane aspect, filling
+        # the space while keeping all data visible.
+        #
+        # The fill always recomputes from a stored BASE range (the data/preserved
+        # range the server rendered) rather than the current — possibly already
+        # extended — range, so repeated re-fits cannot drift. A ResizeObserver
+        # re-renders Plotly and re-fits whenever the pane changes size (the pane
+        # drag-resizers and window-ratio changes do not fire Plotly's own resize).
+        app.clientside_callback(
+            """
+            function(_fig) {
+                var NO_UPDATE = window.dash_clientside.no_update;
+                try {
+                    var el = document.getElementById('pca-map-plot');
+                    if (!el) return NO_UPDATE;
+                    var d = el.data ? el : (el.querySelector && el.querySelector('.js-plotly-plot'));
+                    if (!d) return NO_UPDATE;
+
+                    function geoRange() {
+                        var g = d._fullLayout && d._fullLayout.geo;
+                        if (!g || !g.lonaxis || !g.lataxis || !g.lonaxis.range || !g.lataxis.range) return null;
+                        return {lon: g.lonaxis.range.slice(), lat: g.lataxis.range.slice()};
+                    }
+                    function fillFromBase() {
+                        var base = d.__simBaseRange;
+                        if (!base || !d._fullLayout || !d._fullLayout.geo) return;
+                        var dom = d._fullLayout.geo.domain || {x: [0, 1], y: [0, 1]};
+                        // Live container size — dcc.Graph's own autosize does not
+                        // catch pane drag-resizes, so we drive the plot size here.
+                        var rc = el.getBoundingClientRect();
+                        var pxW = rc.width * (dom.x[1] - dom.x[0]);
+                        var pxH = rc.height * (dom.y[1] - dom.y[0]);
+                        if (!pxW || !pxH) return;
+                        var paneAspect = pxW / pxH;
+                        // Equirectangular: box aspect is lonSpan/latSpan in degrees.
+                        var lonSpan = base.lon[1] - base.lon[0];
+                        var latSpan = base.lat[1] - base.lat[0];
+                        if (lonSpan <= 0 || latSpan <= 0) return;
+                        // Centre a span of width `span` on `mid`, but keep it inside
+                        // [-lim, lim]: if it would overflow one edge (e.g. past the
+                        // north pole), shift it the other way so the extra space
+                        // shows real land rather than blank beyond-pole ocean — and
+                        // latitude never exceeds ±90, which would corrupt the
+                        // equirectangular projection's scale.
+                        function fit(mid, span, lim) {
+                            if (span >= 2 * lim) return [-lim, lim];
+                            var lo = mid - span / 2, hi = mid + span / 2;
+                            if (hi > lim) { lo -= (hi - lim); hi = lim; }
+                            if (lo < -lim) { hi += (-lim - lo); lo = -lim; }
+                            return [lo, hi];
+                        }
+                        var newLon = base.lon.slice(), newLat = base.lat.slice();
+                        if (lonSpan / latSpan < paneAspect) {
+                            // Latitude binds → keep base latitude, extend longitude.
+                            newLon = fit((base.lon[0] + base.lon[1]) / 2, latSpan * paneAspect, 180);
+                        } else {
+                            // Longitude binds → keep base longitude, extend latitude.
+                            newLat = fit((base.lat[0] + base.lat[1]) / 2, lonSpan / paneAspect, 90);
+                        }
+                        // Skip if nothing changed (avoids churn; no resize loop
+                        // since setting the plot size does not change the container).
+                        var cur = geoRange();
+                        var fl = d._fullLayout;
+                        if (cur &&
+                            Math.abs(cur.lon[0] - newLon[0]) < 0.05 && Math.abs(cur.lon[1] - newLon[1]) < 0.05 &&
+                            Math.abs(cur.lat[0] - newLat[0]) < 0.05 && Math.abs(cur.lat[1] - newLat[1]) < 0.05 &&
+                            Math.abs((fl.width || 0) - rc.width) < 1 && Math.abs((fl.height || 0) - rc.height) < 1) return;
+                        Plotly.relayout(d, {
+                            width: rc.width, height: rc.height,
+                            'geo.lonaxis.range': newLon, 'geo.lataxis.range': newLat
+                        });
+                    }
+
+                    if (!d._fullLayout || !d._fullLayout.geo) return NO_UPDATE;
+
+                    // A figure update means the server rendered a fresh data/
+                    // preserved range: adopt it as the base to fill from.
+                    var r = geoRange();
+                    if (r) d.__simBaseRange = r;
+
+                    // Re-fit on any container resize (pane drag-resizers, window
+                    // ratio changes) — these do not fire dcc.Graph's autosize.
+                    if (!d.__simResizeObs && window.ResizeObserver) {
+                        d.__simResizeObs = new ResizeObserver(function() {
+                            window.requestAnimationFrame(fillFromBase);
+                        });
+                        d.__simResizeObs.observe(el);
+                    }
+
+                    fillFromBase();
+                } catch (err) { /* ignore */ }
+                return NO_UPDATE;
+            }
+            """,
+            Output('map-fill-dummy', 'data'),
+            Input('pca-map-plot', 'figure'),
+            prevent_initial_call=True,
         )
 
     # Right-panel tab switching (Table / Details / Filter)

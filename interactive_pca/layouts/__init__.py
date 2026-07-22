@@ -248,6 +248,8 @@ def create_layout(args, df, pcs,
         dcc.Store(id='save-trigger-store', data=0),       # Incremented on every aesthetics save
         dcc.Store(id='right-panel-tabs-dummy', data=None),  # Dummy output for right-panel tab switching
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
+        dcc.Store(id='map-view-store', data=None),  # Current map view bbox, preserved across basemap toggle
+        dcc.Store(id='map-fill-dummy', data=None),  # Dummy output for the geo pane-fill clientside callback
         dcc.Download(id='download-snapshot'),
         
         # Header with tabs
