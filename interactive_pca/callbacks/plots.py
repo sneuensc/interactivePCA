@@ -14,9 +14,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, State
 
-from ..plots import generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map, build_symbol_legend_traces
+from ..plots import (
+    generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map,
+    generate_map_fig_scattergeo, build_symbol_legend_traces,
+)
 from ..utils import dict_of_dicts_to_tuple
-from ..components import get_aesthetics_for_group, update_figure_hover_templates
+from ..components import get_aesthetics_for_group, update_figure_hover_templates, get_symbol_map_for_group
 
 
 def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNOTATION_TIME, annotation_desc, show_map_plot=True, show_time_plot=True):
@@ -89,7 +92,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
 
         # Symbol-group aesthetics (second dropdown)
         gs = group_symbol if group_symbol and group_symbol != 'none' else None
-        sym_aest = (symbol_store or {}).get(gs, {}) if gs else {}
+        sym_aest = get_symbol_map_for_group(gs, df, symbol_store) if gs else {}
         sym_tuple = dict_of_dicts_to_tuple(sym_aest) if sym_aest else None
 
         # Determine if legend should be shown
@@ -167,10 +170,34 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         mode_str = '3d' if 'enable_3d' in is_3d else '2d'
         uirev = f'{pc_x}-{pc_y}-{pc_z}-{mode_str}'
 
-        # Update layout
-        dual_legend = bool(gs and sym_aest)
-        _r_margin = 180 if (is_categorical and show_legend and dual_legend) else \
-                    140 if (is_categorical and show_legend) else 20
+        # ── Legend layout ─────────────────────────────────────────────────
+        # A single legend on the right of the plot holds up to two titled
+        # sections — one per active grouping (colour groups, then shape
+        # groups). Group titles name the variable; groupclick='toggleitem'
+        # keeps per-category show/hide working. Only the section(s) whose
+        # grouping is active are present, so the legend adapts to color-only,
+        # shape-only, both, or none.
+        has_shape_legend = bool(
+            gs and sym_aest and gs in df.columns and df[gs].dtype.kind not in 'fi'
+        )
+        has_color_legend = bool(is_categorical and show_legend)
+        any_legend = has_color_legend or has_shape_legend or is_continuous
+        _r_margin = 170 if any_legend else 20
+
+        # When both sections are present, use grouped ordering with per-section
+        # titles; otherwise a single section keeps its natural (reversed) order
+        # and the legend title names the variable.
+        _color_legend = dict(
+            visible=has_color_legend or has_shape_legend,
+            x=1.02,
+            y=1.0,
+            xanchor='left',
+            yanchor='top',
+            traceorder='grouped' if has_shape_legend else 'reversed',
+            groupclick='toggleitem',
+            font=dict(size=11),
+            title=dict(text=group if (has_color_legend and not has_shape_legend) else ''),
+        )
         _axis_fmt = dict(exponentformat='power', showexponent='all')
         if 'enable_3d' not in is_3d:
             fig.update_layout(
@@ -179,14 +206,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 margin=dict(l=50, r=_r_margin, t=40, b=40),
                 xaxis=_axis_fmt,
                 yaxis=_axis_fmt,
-                legend=dict(
-                    visible=show_legend,
-                    x=1.02 if is_categorical else 0.02,
-                    y=1 if is_categorical else 0.98,
-                    xanchor='left',
-                    yanchor='top',
-                    traceorder='reversed',
-                ),
+                legend=_color_legend,
                 dragmode='lasso',
                 hovermode='closest',
                 hoverlabel=dict(
@@ -199,14 +219,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             fig.update_layout(
                 autosize=True,
                 uirevision=uirev,
-                legend=dict(
-                    visible=show_legend,
-                    x=1.02 if is_categorical else 0.02,
-                    y=1 if is_categorical else 0.98,
-                    xanchor='left',
-                    yanchor='top',
-                    traceorder='reversed',
-                ),
+                legend=_color_legend,
                 hovermode='closest',
                 hoverlabel=dict(
                     bgcolor='white',
@@ -214,38 +227,71 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     namelength=-1
                 )
             )
-        
+
         # Store trace map for fast updates: trace_name -> index
         trace_map = {trace.name: i for i, trace in enumerate(fig.data)}
-        
+
         # Apply hover formatting with current settings
         fig_dict = fig.to_dict()
         group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
         fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'pca', group_symbol=gs)
 
-        # Shape-group legend — independent legend2 box below the colour legend.
-        # Traces carry legend='legend2' so they never appear in legend1.
-        if gs and sym_aest:
+        # Shape-group legend section — appended to the single main legend as a
+        # titled block below the colour groups.
+        if has_shape_legend:
             _t = 'scatter3d' if 'enable_3d' in is_3d else ('scattergl' if len(df) > 3000 else 'scatter')
             _sz = aesthetics.get('size', {}).get('default', 8)
+            color_entries = []
+            if has_color_legend:
+                # The real colour traces carry per-point symbols (dual mode), so
+                # their legend swatch would show an arbitrary shape. Hide them
+                # from the legend and add neutral circle swatches instead, so the
+                # colour section encodes colour only. The real traces keep their
+                # names, so legend clicks still toggle/hide points (legend_sync).
+                color_map = aesthetics.get('color', {})
+                order = aesthetics.get('order')
+                seen = []
+                for t in fig_dict['data']:
+                    if (t.get('showlegend')
+                            and t.get('name') != '__hover_highlight__'
+                            and t.get('legendgroup') != 'grp_shape'):
+                        t['showlegend'] = False
+                        seen.append(t.get('name'))
+                vals = [v for v in order if v in seen] if order else seen
+                for i, val in enumerate(vals):
+                    entry = {
+                        'type': _t, 'mode': 'markers',
+                        'marker': {'size': _sz, 'color': color_map.get(str(val), '#888888'),
+                                   'symbol': 'circle'},
+                        'name': str(val), 'legendgroup': 'grp_color',
+                        'showlegend': True, 'hovertemplate': '<extra></extra>',
+                    }
+                    if i == 0:
+                        entry['legendgrouptitle'] = {'text': group}
+                    if _t == 'scatter3d':
+                        entry['x'] = [None]; entry['y'] = [None]; entry['z'] = [None]
+                    else:
+                        entry['x'] = [None]; entry['y'] = [None]
+                    color_entries.append(entry)
             sym_entries = build_symbol_legend_traces(gs, sym_aest, default_size=_sz, trace_type=_t)
-            fig_dict['data'] = list(fig_dict['data']) + sym_entries  # append, order irrelevant
-            try:
-                leg = fig_dict['layout'].get('legend', {})
-                fig_dict['layout']['legend']['visible'] = True
-                # Position legend2 below legend1; each entry ≈ 0.04 normalised units
-                n_color = sum(1 for t in fig_dict['data']
-                              if t.get('showlegend') and t.get('legend', '') != 'legend2')
-                leg2_y = max(0.02, 1.0 - (n_color + 0.5) * 0.04)
-                fig_dict['layout']['legend2'] = {
-                    'x': leg.get('x', 1.02),
-                    'xanchor': 'left',
-                    'y': leg2_y,
-                    'yanchor': 'top',
-                    'traceorder': 'normal',
-                }
-            except (KeyError, TypeError):
-                pass
+            fig_dict['data'] = list(fig_dict['data']) + color_entries + sym_entries
+            fig_dict['layout'].pop('legend2', None)
+
+            # Continuous colour shows a colorbar rather than a colour legend, and
+            # by default it occupies the same right-hand strip as the shape
+            # legend. Shrink the colorbar to the top and drop the shape legend
+            # below it so the two do not overlap.
+            if is_continuous:
+                for t in fig_dict['data']:
+                    mk = t.get('marker') or {}
+                    if mk.get('showscale') or mk.get('colorbar'):
+                        cb = dict(mk.get('colorbar') or {})
+                        cb.update({'len': 0.4, 'y': 1.0, 'yanchor': 'top',
+                                   'x': 1.02, 'xanchor': 'left', 'thickness': 14})
+                        mk['colorbar'] = cb
+                        t['marker'] = mk
+                _leg = fig_dict['layout'].setdefault('legend', {})
+                _leg.update({'y': 0.55, 'yanchor': 'top'})
 
         # Determine what triggered this callback.
         # For aesthetics/legend-only changes the structural layout is unchanged,
@@ -280,20 +326,25 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('dropdown-group-symbol', 'value'),
             Input('symbol-aesthetics-store', 'data'),
             Input('save-trigger-store', 'data'),
+            Input('map-type-toggle', 'value'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             State('selection-store', 'data'),
         )
         def update_map_plot(group, aesthetics_store, group_symbol, symbol_store, _save_tick,
-                            hover_detailed, selected_cols, selection_store):
+                            map_type, hover_detailed, selected_cols, selection_store):
             if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
                 return {}
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
             aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
             gs = group_symbol if group_symbol and group_symbol != 'none' else None
-            sym_aest = (symbol_store or {}).get(gs, {}) if gs else {}
+            sym_aest = get_symbol_map_for_group(gs, df, symbol_store) if gs else {}
             sym_tuple = dict_of_dicts_to_tuple(sym_aest) if sym_aest else None
-            fig = create_geographical_map(
+            # 'tiles' → interactive Scattermap basemap; anything else → Scattergeo
+            # (default), which matches the PCA/time plot rendering.
+            use_tiles = map_type == 'tiles'
+            map_builder = create_geographical_map if use_tiles else generate_map_fig_scattergeo
+            fig = map_builder(
                 group=group,
                 aesthetics_tuple=aesthetics_tuple,
                 legend=False,
@@ -317,7 +368,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     yanchor='top',
                     traceorder='reversed',
                 ),
-                dragmode='lasso',
+                dragmode='select' if not use_tiles else 'lasso',
                 hoverlabel=dict(
                     bgcolor='white',
                     font_color='#333',
@@ -383,7 +434,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             unsel_color     = aesthetics['color'].get('unselected', '#cccccc')
             unsel_opacity   = aesthetics['opacity'].get('unselected', 0.3)
             gs = group_symbol if group_symbol and group_symbol != 'none' else None
-            sym_aest = (symbol_store or {}).get(gs, {}) if gs else {}
+            sym_aest = get_symbol_map_for_group(gs, df, symbol_store) if gs else {}
             unsel_size_base = aesthetics['size'].get('default', 8)
             unsel_size      = aesthetics['size'].get('unselected', unsel_size_base)
             line_color_map  = aesthetics.get('line_color', {})

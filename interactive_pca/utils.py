@@ -23,22 +23,32 @@ def make_unique_abbr(cur_list, max_length=3):
     clean_re = re.compile(r'[^a-zA-Z0-9 ]')
     space_re = re.compile(r' ')
 
-    # Clean: remove special characters
-    cleaned = [clean_re.sub('', str(elem)) for elem in cur_list]
+    # Clean: remove special characters, then replace spaces with underscores
+    cleaned = [space_re.sub('_', clean_re.sub('', str(elem))) for elem in cur_list]
 
-    # Abbreviate: replace spaces with underscores and truncate
-    abbreviated = [space_re.sub('_', elem[:max_length]).rstrip('_') for elem in cleaned]
+    # Base abbreviation: truncate to max_length.
+    bases = [elem[:max_length].rstrip('_') for elem in cleaned]
 
-    # Make unique using a counter
-    counter = defaultdict(int)
+    # Make unique while never exceeding max_length: when a numeric suffix is
+    # needed to disambiguate, the prefix is shortened so that
+    # len(prefix) + len(suffix) <= max_length.
+    used = set()
     unique_abbr = []
-    for abbr in abbreviated:
-        new_abbr = abbr
-        while new_abbr in counter:
-            counter[abbr] += 1
-            new_abbr = f"{abbr}{counter[abbr]}"
-        counter[new_abbr] = 0
-        unique_abbr.append(new_abbr)
+    for base in bases:
+        if base not in used:
+            unique_abbr.append(base)
+            used.add(base)
+            continue
+        n = 1
+        while True:
+            suffix = str(n)
+            prefix_len = max(0, max_length - len(suffix))
+            candidate = (base[:prefix_len].rstrip('_') + suffix)
+            if candidate not in used:
+                break
+            n += 1
+        unique_abbr.append(candidate)
+        used.add(candidate)
 
     return unique_abbr
 

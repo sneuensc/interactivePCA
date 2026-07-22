@@ -15,7 +15,63 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import html, dcc, Input, Output, State, ALL
 
-from ..components import get_aesthetics_for_group, get_init_aesthetics
+from ..components import get_aesthetics_for_group, get_init_aesthetics, get_symbol_map_for_group
+from ..symbols import SHAPE_SYMBOLS, MAP_SYMBOLS, SCATTER3D_SYMBOLS
+
+
+def _ordered_symbol_map(row_data, virtual_row_data):
+    """Build the {group: symbol} map preserving the grid's row order.
+
+    Cell values come from rowData (updated on edit); the row order comes from
+    virtualRowData (updated on drag-and-drop). The resulting dict's key order
+    drives the shape legend order, mirroring the colour groups' 'order'.
+    """
+    values = {r['Group']: r.get('Symbol', 'circle')
+              for r in (row_data or []) if r.get('Group') and r.get('Symbol')}
+    order = [r.get('Group') for r in (virtual_row_data or []) if r.get('Group') in values]
+    for g in values:              # append any rows missing from virtualRowData
+        if g not in order:
+            order.append(g)
+    return {g: values[g] for g in order}
+
+
+def _shape_column_defs():
+    """Column definitions for the shape (symbol) editor grid.
+
+    Besides the editable Symbol column, two read-only columns indicate — live,
+    as the symbol is changed — whether that shape renders faithfully on the
+    geographic map and in the 3D scatter. All offered shapes work in the 2D
+    scatter and on the map (drawn as icons); the 3D scatter supports only a
+    subset and silently remaps the rest, which the indicator flags.
+    """
+    map_ok = list(MAP_SYMBOLS)
+    d3_ok = list(SCATTER3D_SYMBOLS)
+    return [
+        {'field': 'Group', 'headerName': 'Group', 'editable': False, 'flex': 1,
+         'rowDrag': True},
+        {
+            'field': 'Symbol', 'headerName': 'Symbol', 'editable': True,
+            'width': 140, 'suppressSizeToFit': True, 'singleClickEdit': True,
+            'cellEditor': 'agSelectCellEditor',
+            'cellEditorParams': {'values': SHAPE_SYMBOLS},
+        },
+        {
+            'headerName': 'Map', 'editable': False, 'width': 80,
+            'valueGetter': {'function':
+                f"{map_ok}.indexOf(params.data.Symbol) >= 0 ? '✓' : '✗'"},
+            'cellStyle': {'function':
+                f"{map_ok}.indexOf(params.data.Symbol) >= 0 ? {{'color':'#2e7d32','textAlign':'center'}} : {{'color':'#c62828','textAlign':'center'}}"},
+            'headerTooltip': 'Renders as this shape on the geographic map',
+        },
+        {
+            'headerName': '3D', 'editable': False, 'width': 80,
+            'valueGetter': {'function':
+                f"{d3_ok}.indexOf(params.data.Symbol) >= 0 ? '✓' : '✗'"},
+            'cellStyle': {'function':
+                f"{d3_ok}.indexOf(params.data.Symbol) >= 0 ? {{'color':'#2e7d32','textAlign':'center'}} : {{'color':'#c62828','textAlign':'center'}}"},
+            'headerTooltip': 'Renders as this shape in the 3D scatter (others fall back to a similar shape)',
+        },
+    ]
 
 
 def register_aesthetics_callbacks(app, args, df, annotation_desc):
@@ -85,30 +141,22 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
 
             # Shape-only mode: no colour group, only shape group
             if not has_color and has_shape:
-                sym_aest = (symbol_store or {}).get(group_symbol, {})
+                sym_aest = get_symbol_map_for_group(group_symbol, df, symbol_store)
                 if group_symbol in df.columns and df[group_symbol].dtype.kind not in 'fi':
                     sym_unique = df[group_symbol].dropna().unique()
                     sym_rows = [{'Group': str(v), 'Symbol': sym_aest.get(str(v), 'circle')}
                                 for v in sym_unique]
                 else:
                     sym_rows = []
-                sym_col_defs = [
-                    {'field': 'Group', 'headerName': 'Group', 'editable': False, 'flex': 1},
-                    {
-                        'field': 'Symbol', 'headerName': 'Symbol', 'editable': True,
-                        'width': 150, 'suppressSizeToFit': True, 'singleClickEdit': True,
-                        'cellEditor': 'agSelectCellEditor',
-                        'cellEditorParams': {'values': ['circle', 'square', 'diamond', 'cross',
-                                                        'triangle-up', 'triangle-down', 'star']}
-                    }
-                ]
+                sym_col_defs = _shape_column_defs()
                 return html.Div([
                     dag.AgGrid(
                         id='symbol-edit-table',
                         rowData=sym_rows,
                         columnDefs=sym_col_defs,
                         defaultColDef={'resizable': True},
-                        dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40},
+                        dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40,
+                                         'rowDragManaged': True, 'animateRows': True},
                         style={'height': '350px', 'width': '100%',
                                'border': '1px solid #dee2e6', 'borderRadius': '4px', 'overflow': 'hidden'}
                     ),
@@ -456,7 +504,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 return html.Div([color_table, _empty_sym_table])
 
             # ── Dual mode: also build the Shape (symbol-only) tab ───────────
-            sym_aest = (symbol_store or {}).get(group_symbol, {})
+            sym_aest = get_symbol_map_for_group(group_symbol, df, symbol_store)
             if group_symbol in df.columns and df[group_symbol].dtype.kind not in 'fi':
                 sym_unique = df[group_symbol].dropna().unique()
                 sym_rows = [{'Group': str(v), 'Symbol': sym_aest.get(str(v), 'circle')}
@@ -464,22 +512,14 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             else:
                 sym_rows = []
 
-            sym_col_defs = [
-                {'field': 'Group', 'headerName': 'Group', 'editable': False, 'flex': 1},
-                {
-                    'field': 'Symbol', 'headerName': 'Symbol', 'editable': True,
-                    'width': 150, 'suppressSizeToFit': True, 'singleClickEdit': True,
-                    'cellEditor': 'agSelectCellEditor',
-                    'cellEditorParams': {'values': ['circle', 'square', 'diamond', 'cross',
-                                                    'triangle-up', 'triangle-down', 'star']}
-                }
-            ]
+            sym_col_defs = _shape_column_defs()
             pattern_table = dag.AgGrid(
                 id='symbol-edit-table',
                 rowData=sym_rows,
                 columnDefs=sym_col_defs,
                 defaultColDef={'resizable': True},
-                dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40},
+                dashGridOptions={'rowSelection': 'single', 'headerHeight': 40, 'rowHeight': 40,
+                                 'rowDragManaged': True, 'animateRows': True},
                 style={'height': '350px', 'width': '100%',
                        'border': '1px solid #dee2e6', 'borderRadius': '4px', 'overflow': 'hidden'}
             )
@@ -564,13 +604,14 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
             State('aesthetics-edit-table', 'rowData'),
             State('aesthetics-edit-table', 'virtualRowData'),
             State('symbol-edit-table', 'rowData'),
+            State('symbol-edit-table', 'virtualRowData'),
             State({'type': 'colorscale-dropdown-modal', 'index': ALL}, 'value')
         ],
         prevent_initial_call=True
     )
     def save_aesthetics_edits(n_clicks, aesthetics_store, symbol_store, group, group_symbol,
                               color_values, color_ids, row_data, virtual_row_data, symbol_row_data,
-                              colorscale_values):
+                              symbol_virtual_row_data, colorscale_values):
         
         print(f"save_aesthetics_edits called with n_clicks={n_clicks}, group={group}, group_symbol={group_symbol}")
         
@@ -594,11 +635,8 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
         if not has_color and has_shape:
             new_symbol_store = dict(symbol_store or {})
             if symbol_row_data:
-                new_symbol_store[group_symbol] = {
-                    row['Group']: row.get('Symbol', 'circle')
-                    for row in symbol_row_data
-                    if row.get('Group') and row.get('Symbol')
-                }
+                new_symbol_store[group_symbol] = _ordered_symbol_map(
+                    symbol_row_data, symbol_virtual_row_data)
             return aesthetics_store, new_symbol_store, int(n_clicks or 0)
 
         # Colour group is active — get current group aesthetics
@@ -770,11 +808,9 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
         # Update symbol-aesthetics-store from Shape tab (dual mode only)
         new_symbol_store = dash.no_update
         if group_symbol and group_symbol != 'none' and symbol_row_data:
-            sym_map = {row['Group']: row.get('Symbol', 'circle')
-                       for row in symbol_row_data
-                       if row.get('Group') and row.get('Symbol')}
             updated_sym = dict(symbol_store or {})
-            updated_sym[group_symbol] = sym_map
+            updated_sym[group_symbol] = _ordered_symbol_map(
+                symbol_row_data, symbol_virtual_row_data)
             new_symbol_store = updated_sym
 
         return aesthetics_store, new_symbol_store, int(n_clicks or 0)
