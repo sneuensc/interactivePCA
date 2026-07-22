@@ -268,6 +268,88 @@ def create_app(args):
     # ── Snapshot export ───────────────────────────────────────────────────
     register_snapshot_callback(app)
 
+    # ── Map shape icons ─────────────────────────────────────────────────────
+    # The MapLibre basemap ships no sprite, so non-'circle' marker symbols
+    # (triangles, stars, …) cannot be drawn by default. This clientside
+    # callback generates each symbol as an SDF icon on a canvas and registers
+    # it on the underlying map, both proactively and via the styleimagemissing
+    # event, so shape grouping renders on the map tinted by the group colour.
+    # It degrades to a no-op (circles only) if the map internals are unavailable.
+    if show_map_plot:
+        app.clientside_callback(
+            """
+            function(_fig) {
+                var NO_UPDATE = window.dash_clientside.no_update;
+                try {
+                    var el = document.getElementById('pca-map-plot');
+                    if (!el) return NO_UPDATE;
+                    var div = el.data ? el : (el.querySelector && el.querySelector('.js-plotly-plot'));
+                    if (!div || !div._fullLayout || !div._fullLayout.map ||
+                        !div._fullLayout.map._subplot) return NO_UPDATE;
+                    var map = div._fullLayout.map._subplot.map;
+                    if (!map || !map.addImage) return NO_UPDATE;
+
+                    var S = 64;
+                    function draw(kind) {
+                        var c = document.createElement('canvas'); c.width = S; c.height = S;
+                        var x = c.getContext('2d'); x.clearRect(0, 0, S, S);
+                        x.fillStyle = '#ffffff';
+                        var m = S * 0.14, a = S - m, cx = S / 2, cy = S / 2;
+                        x.beginPath();
+                        if (kind === 'triangle-up') { x.moveTo(cx, m); x.lineTo(a, a); x.lineTo(m, a); x.closePath(); x.fill(); }
+                        else if (kind === 'triangle-down') { x.moveTo(m, m); x.lineTo(a, m); x.lineTo(cx, a); x.closePath(); x.fill(); }
+                        else if (kind === 'square') { x.fillRect(m, m, a - m, a - m); }
+                        else if (kind === 'diamond') { x.moveTo(cx, m); x.lineTo(a, cy); x.lineTo(cx, a); x.lineTo(m, cy); x.closePath(); x.fill(); }
+                        else if (kind === 'cross') { var t = S * 0.16; x.fillRect(cx - t, m, 2 * t, a - m); x.fillRect(m, cy - t, a - m, 2 * t); }
+                        else if (kind === 'star') {
+                            var spikes = 5, or = S * 0.42, ir = S * 0.18, rot = -Math.PI / 2, step = Math.PI / spikes;
+                            x.moveTo(cx + Math.cos(rot) * or, cy + Math.sin(rot) * or);
+                            for (var i = 0; i < spikes; i++) {
+                                rot += step; x.lineTo(cx + Math.cos(rot) * ir, cy + Math.sin(rot) * ir);
+                                rot += step; x.lineTo(cx + Math.cos(rot) * or, cy + Math.sin(rot) * or);
+                            }
+                            x.closePath(); x.fill();
+                        } else { x.arc(cx, cy, S * 0.34, 0, 2 * Math.PI); x.fill(); }
+                        var img = x.getImageData(0, 0, S, S);
+                        return { width: S, height: S, data: new Uint8Array(img.data.buffer) };
+                    }
+
+                    // Plotly requests map icons as '<symbol>-15'.
+                    var kinds = {
+                        'circle-15': 'circle', 'square-15': 'square', 'diamond-15': 'diamond',
+                        'triangle-up-15': 'triangle-up', 'triangle-down-15': 'triangle-down',
+                        'star-15': 'star', 'cross-15': 'cross'
+                    };
+                    // pixelRatio makes the 64px canvas behave as a ~15px icon so
+                    // Plotly's maki '-15' sizing renders icons at roughly the same
+                    // pixel size as native 'circle' markers.
+                    var PR = S / 15;
+                    if (!map.__simIconsBound) {
+                        map.__simIconsBound = true;
+                        map.on('styleimagemissing', function(e) {
+                            var id = e.id;
+                            if (!kinds[id] || map.hasImage(id)) return;
+                            map.addImage(id, draw(kinds[id]), { sdf: true, pixelRatio: PR });
+                        });
+                    }
+                    // Register every icon proactively so future renders find them.
+                    // The bound styleimagemissing handler covers anything still
+                    // missing mid-render. We deliberately do NOT call
+                    // Plotly.restyle here: mutating the Dash-managed graph outside
+                    // Dash desyncs dcc.Graph and stops later figure updates (e.g.
+                    // switching to a continuous colour scale) from being applied.
+                    Object.keys(kinds).forEach(function(id) {
+                        if (!map.hasImage(id)) { map.addImage(id, draw(kinds[id]), { sdf: true, pixelRatio: PR }); }
+                    });
+                } catch (err) { /* map internals unavailable — circles only */ }
+                return NO_UPDATE;
+            }
+            """,
+            Output('hover-sync-dummy', 'data', allow_duplicate=True),
+            Input('pca-map-plot', 'figure'),
+            prevent_initial_call='initial_duplicate',
+        )
+
     # Right-panel tab switching (Table / Details / Filter)
     app.clientside_callback(
         """

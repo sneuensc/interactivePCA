@@ -15,7 +15,10 @@ import dash_bootstrap_components as dbc
 from dash import html, dcc
 
 from ..utils import strip_ansi, dict_of_dicts_to_tuple
-from ..plots import generate_fig_scatter2d, generate_fig_scatter3d, create_geographical_map
+from ..plots import (
+    generate_fig_scatter2d, generate_fig_scatter3d,
+    create_geographical_map, generate_map_fig_scattergeo,
+)
 from ..components import (
     create_checkbox_column_def,
     create_standard_column_def,
@@ -358,7 +361,9 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # Generate initial map figure (if coordinates available)
     init_map_fig = None
     if ANNOTATION_LAT is not None and ANNOTATION_LONG is not None:
-        init_map_fig = create_geographical_map(
+        # Default to the Scattergeo map (consistent with the PCA/time plots);
+        # a toggle lets the user switch to the tiled Scattermap at runtime.
+        init_map_fig = generate_map_fig_scattergeo(
             group=init_group,
             aesthetics_tuple=aesthetics_tuple,
             legend=False,
@@ -713,11 +718,36 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # Map plot (top right) + Annotation table (bottom right)
     map_plot = html.Div()
     if show_map_plot:
-        map_plot = dcc.Graph(
-            id='pca-map-plot',
-            figure=init_map_fig,
-            style={'height': '100%'},
-            clear_on_unhover=True
+        map_type_toggle = html.Div(
+            [
+                html.Span('Basemap:', style={'fontSize': '12px', 'color': '#555',
+                                             'marginRight': '8px', 'fontWeight': 500}),
+                dcc.RadioItems(
+                    id='map-type-toggle',
+                    options=[
+                        {'label': 'Map', 'value': 'geo'},
+                        {'label': 'Tiles', 'value': 'tiles'},
+                    ],
+                    value='geo',
+                    inline=True,
+                    labelStyle={'marginRight': '12px', 'fontSize': '12px', 'cursor': 'pointer'},
+                    inputStyle={'marginRight': '4px'},
+                ),
+            ],
+            style={'display': 'flex', 'alignItems': 'center', 'padding': '2px 6px',
+                   'flex': '0 0 auto'},
+        )
+        map_plot = html.Div(
+            [
+                map_type_toggle,
+                dcc.Graph(
+                    id='pca-map-plot',
+                    figure=init_map_fig,
+                    style={'flex': '1 1 auto', 'minHeight': 0},
+                    clear_on_unhover=True,
+                ),
+            ],
+            style={'display': 'flex', 'flexDirection': 'column', 'height': '100%'},
         )
     
     # Annotation table

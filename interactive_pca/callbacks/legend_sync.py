@@ -106,9 +106,12 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
 
         if (!Object.keys(visMap).length) return [NO_UPDATE, NO_UPDATE];
 
-        // ── Apply visibility to every other plot ───────────────────────────
+        // ── Apply visibility across all plots ───────────────────────────────
+        // The source plot is included too: in dual (colour+shape) mode the
+        // clickable colour legend entry is a neutral swatch trace while the
+        // data lives in a separate same-named trace, so the source plot's data
+        // trace must be toggled here as well.
         allIds.forEach(function(plotId) {{
-            if (plotId === triggeredId) return;
             var div = getDiv(plotId);
             if (!div) return;
 

@@ -21,9 +21,15 @@ class TestUtils:
         assert len(set(result)) == len(result)  # All unique
     
     def test_make_unique_abbr_with_length(self):
-        """Test abbreviation with custom length."""
+        """Abbreviations never exceed max_length, even when disambiguation is needed.
+
+        The inputs all share the 2-char prefix 'te'. To stay within max_length=2
+        while remaining unique, the prefix is shortened to make room for a numeric
+        suffix (e.g. 'te', 't1', 't2').
+        """
         result = make_unique_abbr(['test', 'team', 'terror'], max_length=2)
-        assert all(len(abbr) <= 2 for abbr in result)
+        assert all(len(abbr) <= 2 for abbr in result)  # length guaranteed
+        assert len(set(result)) == len(result)          # all unique
     
     def test_find_incrementing_prefix_series(self):
         """Test finding PC columns."""

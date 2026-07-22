@@ -7,6 +7,29 @@ import logging
 import copy
 import plotly.express as px
 
+from ..symbols import SHAPE_SYMBOLS
+
+
+def get_symbol_map_for_group(group_symbol, df, symbol_store):
+    """Return the {category: symbol} map for a shape grouping.
+
+    Uses the value stored in ``symbol_store`` when present; otherwise derives
+    the default assignment (categories cycled through SHAPE_SYMBOLS). Deriving
+    it here means the plot callbacks do not depend on the store having been
+    populated yet, which avoids a first-render race where the map/scatter would
+    briefly show all circles.
+    """
+    if not group_symbol or group_symbol == 'none' or group_symbol not in df.columns:
+        return {}
+    stored = (symbol_store or {}).get(group_symbol)
+    if stored:
+        return stored
+    if df[group_symbol].dtype.kind in 'fi':
+        return {}
+    unique_vals = df[group_symbol].dropna().unique()
+    return {str(val): SHAPE_SYMBOLS[i % len(SHAPE_SYMBOLS)]
+            for i, val in enumerate(unique_vals)}
+
 
 def load_aesthetics_file(filepath):
     """

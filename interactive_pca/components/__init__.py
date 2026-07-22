@@ -9,7 +9,8 @@ from .aesthetics import (
     load_aesthetics_file,
     merge_aesthetics,
     get_init_aesthetics,
-    get_aesthetics_for_group
+    get_aesthetics_for_group,
+    get_symbol_map_for_group
 )
 from .hover import (
     build_hover_text,
@@ -25,6 +26,7 @@ __all__ = [
     'merge_aesthetics',
     'get_init_aesthetics',
     'get_aesthetics_for_group',
+    'get_symbol_map_for_group',
     'build_hover_text',
     'update_figure_hover_templates',
     'register_hover_update_callbacks',

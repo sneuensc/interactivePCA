@@ -83,34 +83,25 @@ def _to_3d_symbol(sym):
 
 
 def build_symbol_legend_traces(group_symbol, symbol_aest, default_size=8, trace_type='scatter'):
-    """Return a list of empty trace dicts that form the shape-group legend section.
+    """Return empty marker traces forming the shape-group legend section.
 
-    Prepend these to fig_dict['data'] so that with traceorder='reversed' they
-    appear at the BOTTOM of the legend (below the colour-group entries).
+    All entries share legendgroup='grp_shape' and the first carries a legend
+    group title, so they render as a titled block inside the single main legend
+    (below the colour-group block). Colours are neutral grey — this legend
+    encodes shape only.
     """
-    # Shape traces go into legend2 (a second independent Plotly legend box).
-    # Natural (non-reversed) ordering works here since legend2 has its own
-    # traceorder='normal'.  Title trace first → appears at top of legend2.
     entries = [(k, v) for k, v in symbol_aest.items() if k != 'default']
     result = []
-    title = {
-        'type': trace_type, 'mode': 'markers',
-        'marker': {'size': 0, 'color': 'rgba(0,0,0,0)', 'symbol': 'circle'},
-        'name': f'<b>{group_symbol}</b>',
-        'legend': 'legend2', 'showlegend': True, 'hovertemplate': '<extra></extra>',
-    }
-    if trace_type == 'scatter3d':
-        title['x'] = [None]; title['y'] = [None]; title['z'] = [None]
-    else:
-        title['x'] = [None]; title['y'] = [None]
-    result.append(title)
-    for sym_val, sym_name in entries:
+    for i, (sym_val, sym_name) in enumerate(entries):
         trace = {
             'type': trace_type, 'mode': 'markers',
             'marker': {'size': default_size, 'color': '#888888', 'symbol': sym_name},
-            'name': f'  {sym_val}',
-            'legend': 'legend2', 'showlegend': True, 'hovertemplate': '<extra></extra>',
+            'name': str(sym_val),
+            'legendgroup': 'grp_shape',
+            'showlegend': True, 'hovertemplate': '<extra></extra>',
         }
+        if i == 0:
+            trace['legendgrouptitle'] = {'text': group_symbol}
         if trace_type == 'scatter3d':
             trace['x'] = [None]; trace['y'] = [None]; trace['z'] = [None]
         else:
@@ -428,10 +419,20 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
         Uses global _df DataFrame.
     """
     aesthetics_group = tuple_to_dict_of_dicts(aesthetics_tuple)
-    # Note: Scattermap has very limited symbol support; shape grouping is not
-    # applied on the map — colour is the only reliable visual channel there.
+    sym_aest = tuple_to_dict_of_dicts(symbol_aest_tuple) if symbol_aest_tuple else {}
+    # Shape grouping IS applied on the map: 'circle' renders natively and every
+    # other symbol is drawn from a generated SDF icon (see the styleimagemissing
+    # handler in app.py) so it is tinted by the group colour. Symbols outside
+    # MAP_SYMBOLS fall back to a circle.
+    dual = bool(group_symbol and group_symbol != 'none'
+                and group_symbol in _df.columns and sym_aest)
+
     def _mk_map(g, df_sub):
-        return get_marker_dict(g, aesthetics_group, df_subset=df_map, mapplot=True)
+        m = dict(get_marker_dict(g, aesthetics_group, df_subset=df_map, mapplot=True))
+        if dual:
+            m['symbol'] = [sym_aest.get(str(v), sym_aest.get('default', 'circle'))
+                           for v in df_sub[group_symbol]]
+        return m
 
     traces = []
 
@@ -466,11 +467,20 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
             showlegend=legend,
         ))
     elif df_map[group].dtype.kind in 'fi':
+        _cont_mk = dict(get_marker_dict(group, aesthetics_group, df_subset=df_map, legend=legend, continuous=True, mapplot=True))
+        # Emit the colour array as a plain list. Serialised as a Plotly binary
+        # typed-array (the default for numpy), Scattermap fails to render the
+        # continuous colour layer and the map shows no points.
+        if 'color' in _cont_mk and hasattr(_cont_mk['color'], 'tolist'):
+            _cont_mk['color'] = _cont_mk['color'].tolist()
+        # Shape is deliberately NOT applied here: map SDF icons are tinted by a
+        # single icon-color and cannot carry a continuous colour scale, so a
+        # continuous colour grouping always uses circles on the map.
         traces.append(go.Scattermap(
             lat=df_map[lat_col],
             lon=df_map[lon_col],
             mode='markers',
-            marker=get_marker_dict(group, aesthetics_group, df_subset=df_map, legend=legend, continuous=True, mapplot=True),
+            marker=_cont_mk,
             unselected=dict(marker=get_marker_dict(group, aesthetics_group, unselected=True, mapplot=True)),
             name=group,
             customdata=df_map['id'],
@@ -526,133 +536,100 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
 create_geographical_map = generate_map_fig_scattermap
 
 
-def generate_map_fig_scattergeo(group='none', aesthetics_group=None, legend=True, lat_col=None, lon_col=None):
+@lru_cache(maxsize=32)
+def generate_map_fig_scattergeo(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None,
+                                group_symbol=None, symbol_aest_tuple=None):
+    """Geographic map using Scattergeo (SVG "geo" subplot, cached).
+
+    Scattergeo shares the 2D scatter's marker semantics — native symbols,
+    marker borders, per-point colour scales, and selected/unselected styling —
+    so it stays visually consistent with the PCA and time plots. The trade-off
+    versus Scattermap is a projected vector basemap (coastlines/countries)
+    instead of interactive raster/vector map tiles.
+
+    Uses the global _df DataFrame.
     """
-    Create a geographical map scatter plot.
-    
-    Args:
-        group: Grouping variable
-        aesthetics_group: Dictionary with aesthetic settings
-        legend: Whether to show legend
-        lat_col: Latitude column name
-        lon_col: Longitude column name
-    
-    Returns:
-        Plotly Figure object
-        
-    Note:
-        Uses global _df DataFrame.
-    """
+    aesthetics_group = tuple_to_dict_of_dicts(aesthetics_tuple)
+    sym_aest = tuple_to_dict_of_dicts(symbol_aest_tuple) if symbol_aest_tuple else {}
+    dual = bool(group_symbol and group_symbol != 'none'
+                and group_symbol in _df.columns and sym_aest)
+
     if lat_col is None or lon_col is None or lat_col not in _df.columns or lon_col not in _df.columns:
-        # Return empty figure if coordinates not available
         return go.Figure().add_annotation(
-            text="Geographic coordinates not available",
-            showarrow=False,
-            font={'size': 20}
-        )
-    
-    # Remove rows with missing coordinates
+            text="Geographic coordinates not available", showarrow=False, font={'size': 20})
+
     df_map = _df.dropna(subset=[lat_col, lon_col])
-    
     if df_map.empty:
         return go.Figure().add_annotation(
-            text="No valid geographic coordinates found",
-            showarrow=False,
-            font={'size': 20}
-        )
-    
+            text="No valid geographic coordinates found", showarrow=False, font={'size': 20})
+
+    def _mk(g, df_sub):
+        """Native marker dict (symbols + borders), optional per-point shapes."""
+        m = dict(get_marker_dict(g, aesthetics_group))
+        if dual:
+            m['symbol'] = [sym_aest.get(str(v), sym_aest.get('default', 'circle'))
+                           for v in df_sub[group_symbol]]
+        return m
+
     traces = []
-    
+
     if group == 'none':
-        # Single group
-        trace = go.Scattergeo(
-            lat=df_map[lat_col],
-            lon=df_map[lon_col],
-            mode='markers',
-            marker=dict(
-                size=aesthetics_group['size'].get('default', 8),
-                color=aesthetics_group['color'].get('default', 'steelblue'),
-                opacity=aesthetics_group['opacity'].get('default', 0.7)
-            ),
-            text=df_map['id'],
-            customdata=df_map['id'],
-            hovertemplate='<b>ID:</b> %{customdata}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
-            name='Samples',
-            showlegend=legend
-        )
-        traces.append(trace)
+        traces.append(go.Scattergeo(
+            lat=df_map[lat_col], lon=df_map[lon_col], mode='markers',
+            marker=_mk('none', df_map),
+            unselected=dict(marker=get_marker_dict(group, aesthetics_group, unselected=True)),
+            name=str(group), customdata=df_map['id'], text=str(group), showlegend=legend,
+        ))
     elif df_map[group].dtype.kind in 'fi':
-        # Continuous variable - use color scale
-        trace = go.Scattergeo(
-            lat=df_map[lat_col],
-            lon=df_map[lon_col],
-            mode='markers',
-            marker=dict(
-                size=aesthetics_group['size'].get('default', 8),
-                color=df_map[group],
-                colorscale=aesthetics_group['color'].get('colorscale', 'Viridis'),
-                opacity=aesthetics_group['opacity'].get('default', 0.7),
-                symbol=aesthetics_group.get('symbol_map', {}).get('default', 'circle'),
-                colorbar=dict(title=group),
-                showscale=True
-            ),
-            text=df_map[group],
-            customdata=df_map['id'],
-            hovertemplate='<b>ID:</b> %{customdata}<br><b>' + group + ':</b> %{text:.2f}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
-            name=group,
-            showlegend=legend
-        )
-        traces.append(trace)
+        m = dict(get_marker_dict(group, aesthetics_group, df_subset=df_map, legend=legend, continuous=True))
+        if 'color' in m and hasattr(m['color'], 'tolist'):
+            m['color'] = m['color'].tolist()
+        if dual:
+            m['symbol'] = [sym_aest.get(str(v), sym_aest.get('default', 'circle'))
+                           for v in df_map[group_symbol]]
+        traces.append(go.Scattergeo(
+            lat=df_map[lat_col], lon=df_map[lon_col], mode='markers', marker=m,
+            unselected=dict(marker=get_marker_dict(group, aesthetics_group, unselected=True)),
+            name=group, customdata=df_map['id'], text=df_map[group], showlegend=legend,
+        ))
     else:
-        # Categorical variable - use colors for each group
-        for group_val in df_map[group].unique():
-            if pd.isna(group_val):
+        for g, group_df in _ordered_group_iter(df_map, group, aesthetics_group):
+            if group_df.empty:
                 continue
-            
-            df_group = df_map[df_map[group] == group_val]
-            
-            color = aesthetics_group['color'].get(str(group_val), 'steelblue')
-            size = aesthetics_group['size'].get(str(group_val), 8)
-            opacity = aesthetics_group['opacity'].get(str(group_val), 0.7)
-            symbol = aesthetics_group['symbol'].get(str(group_val), aesthetics_group['symbol'].get('default', 'circle'))
-            
-            trace = go.Scattergeo(
-                lat=df_group[lat_col],
-                lon=df_group[lon_col],
-                mode='markers',
-                marker=dict(
-                    size=size,
-                    color=color,
-                    opacity=opacity,
-                    symbol=symbol
-                ),
-                text=[str(group_val)] * len(df_group),
-                customdata=df_group['id'],
-                hovertemplate='<b>ID:</b> %{customdata}<br><b>' + group + ':</b> %{text}<br><b>Lat:</b> %{lat:.2f}<br><b>Lon:</b> %{lon:.2f}<extra></extra>',
-                name=str(group_val),
-                showlegend=legend
-            )
-            traces.append(trace)
-    
+            traces.append(go.Scattergeo(
+                lat=group_df[lat_col], lon=group_df[lon_col], mode='markers',
+                marker=_mk(g, group_df),
+                unselected=dict(marker=get_marker_dict(g, aesthetics_group, unselected=True)),
+                name=str(g), customdata=group_df['id'], text=group_df[group], showlegend=legend,
+            ))
+
+    traces.append(go.Scattergeo(
+        lat=[], lon=[], mode='markers',
+        marker=dict(size=16, color='rgba(0,0,0,0)', symbol='circle-open',
+                    line=dict(width=2.5, color='black')),
+        name='__hover_highlight__', showlegend=False, hovertemplate='<extra></extra>',
+    ))
+
     fig = go.Figure(traces)
-    
-    fig.update_layout(
-        geo=dict(
-            projection_type='natural earth',
-            showland=True,
-            landcolor='rgb(243, 243, 243)',
-            coastlinecolor='rgb(204, 204, 204)',
-            showocean=True,
-            oceancolor='rgb(204, 229, 255)',
-            showcountries=True,
-            countrywidth=0.5
-        ),
-        #title=f'Geographic Distribution (grouped by {group})',
-        height=700,
-        hovermode='closest',
-        template='plotly_white'
+
+    geo = dict(
+        projection_type='natural earth',
+        showland=True, landcolor='rgb(243, 243, 243)',
+        showocean=True, oceancolor='rgb(220, 235, 250)',
+        showcoastlines=True, coastlinecolor='rgb(204, 204, 204)',
+        showcountries=True, countrycolor='rgb(210, 210, 210)', countrywidth=0.5,
+        showframe=False, bgcolor='rgba(0,0,0,0)',
     )
-    
+    # Fit the view to the data bounds (with a small margin).
+    lats = df_map[lat_col].dropna()
+    lons = df_map[lon_col].dropna()
+    if not lats.empty:
+        pad_lat = max(float(lats.max() - lats.min()) * 0.08, 1.0)
+        pad_lon = max(float(lons.max() - lons.min()) * 0.08, 1.0)
+        geo['lataxis'] = dict(range=[float(lats.min()) - pad_lat, float(lats.max()) + pad_lat])
+        geo['lonaxis'] = dict(range=[float(lons.min()) - pad_lon, float(lons.max()) + pad_lon])
+        geo['center'] = dict(lat=float(lats.mean()), lon=float(lons.mean()))
+    fig.update_layout(geo=geo)
     return fig
 
 
