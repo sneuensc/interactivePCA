@@ -214,14 +214,16 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
                 return no_update, no_update, dbc.Alert(f"File not found: {path}",
                                                        color='danger')
             try:
-                cols = _read_columns(path, whitespace=True)
+                df = pd.read_csv(path, sep=r"\s+", nrows=None)
+                cols = list(df.columns)
+                n_samples = len(df)
             except Exception as exc:  # noqa: BLE001
                 return no_update, no_update, dbc.Alert(f"Could not read: {exc}",
                                                        color='danger')
             options = [{'label': c, 'value': c} for c in cols]
             first = cols[0] if cols else None
             return options, first, dbc.Alert(
-                f"Read {len(cols)} columns, ID column = '{first}'.", color='success')
+                f"Read {len(cols)} columns, {n_samples} samples.", color='success')
 
         @app.callback(
             Output({'type': 'setup-arg', 'name': 'selectedID'}, 'options'),
