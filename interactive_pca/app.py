@@ -66,40 +66,35 @@ def create_app(args):
 
         if args.annotation:
             annotation, annotation_desc, annotation_cols = load_annotation(args.annotation, args)
-        elif args.eigenvec:
-            # Single-file mode: annotation columns are in the same file as eigenvec
-            # Read the file again to extract annotation columns (non-ID, non-dimension columns)
-            try:
-                full_df = pd.read_csv(args.eigenvec, sep=r"\s+", header=0)
-                # Find the ID column name in the original file (before rename to 'id')
-                original_id_col = args.eigenvecID or full_df.columns[0]
-                dim_set = set(pcs)
-                annotation_cols_list = [c for c in full_df.columns if c != original_id_col and c not in dim_set]
-                if annotation_cols_list:
-                    # Create a minimal annotation dataframe with just the annotation columns + ID
-                    annotation = full_df[[original_id_col] + annotation_cols_list].copy()
-                    annotation.rename(columns={original_id_col: 'id'}, inplace=True)
-                    # Create annotation_desc for the app
-                    from .utils import make_unique_abbr
-                    annotation_desc = pd.DataFrame({
-                        'Abbreviation': make_unique_abbr(annotation_cols_list, max_length=args.col_abbrev),
-                        'Description': annotation_cols_list,
-                        'Type': ['continuous' if annotation[col].dtype.kind in 'fi' else 'categorical'
-                                for col in annotation_cols_list],
-                        'N_levels': [annotation[col].nunique(dropna=False) if annotation[col].dtype.kind not in 'fi'
-                                    else None for col in annotation_cols_list]
-                    })
-                    annotation_desc['Dropdown'] = [
-                        'Yes' if ((typ == 'continuous') or
-                                 ((typ == 'categorical') and (nlev <= args.max_factors)))
-                        else ''
-                        for typ, nlev in zip(annotation_desc['Type'], annotation_desc['N_levels'])
-                    ]
-                    annotation.columns = ['id'] + annotation_desc['Abbreviation'].tolist()
-                    annotation_cols['id'] = 'id'
-                    logging.info(f"   Extracted {len(annotation_cols_list)} annotation columns from eigenvec file.")
-            except Exception as exc:
-                logging.warning(f"Could not extract annotation columns from eigenvec file: {exc}")
+        else:
+            # Single-file mode: eigenvec already has annotation columns if they exist
+            # Extract them from the eigenvec dataframe (all non-ID, non-dimension columns)
+            dim_set = set(pcs)
+            annot_cols = [c for c in eigenvec.columns if c != 'id' and c not in dim_set]
+            if annot_cols:
+                # Create annotation dataframe from the eigenvec file
+                annotation = eigenvec[['id'] + annot_cols].copy()
+                # Rename annotation columns to match eigenvec naming (abbreviated)
+                from .utils import make_unique_abbr
+                abbrev = make_unique_abbr(annot_cols, max_length=args.col_abbrev)
+                annotation.rename(columns=dict(zip(annot_cols, abbrev)), inplace=True)
+                # Create annotation_desc
+                annotation_desc = pd.DataFrame({
+                    'Abbreviation': abbrev,
+                    'Description': annot_cols,
+                    'Type': ['continuous' if eigenvec[c].dtype.kind in 'fi' else 'categorical'
+                            for c in annot_cols],
+                    'N_levels': [eigenvec[c].nunique(dropna=False) if eigenvec[c].dtype.kind not in 'fi'
+                                else None for c in annot_cols]
+                })
+                annotation_desc['Dropdown'] = [
+                    'Yes' if ((typ == 'continuous') or
+                             ((typ == 'categorical') and (nlev <= args.max_factors)))
+                    else ''
+                    for typ, nlev in zip(annotation_desc['Type'], annotation_desc['N_levels'])
+                ]
+                annotation_cols['id'] = 'id'
+                logging.info(f"   Extracted {len(annot_cols)} annotation columns from eigenvec file.")
 
         # Merge data
         df = merge_data(
