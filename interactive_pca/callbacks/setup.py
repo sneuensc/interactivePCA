@@ -285,7 +285,9 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
                 msg = dbc.Alert(f"File not found: {path}", color='danger')
                 return [no_update] * (2 * n) + [msg]
             try:
-                cols = _read_columns(path, whitespace=False)
+                df = pd.read_csv(path, sep='\t', nrows=None)
+                cols = list(df.columns)
+                n_samples = len(df)
             except Exception as exc:  # noqa: BLE001
                 msg = dbc.Alert(f"Could not read: {exc}", color='danger')
                 return [no_update] * (2 * n) + [msg]
@@ -299,7 +301,7 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             }
             values = [cur if cur in cols else guesses.get(dest)
                       for dest, cur in zip(ANNOTATION_DEPENDENT, current)]
-            msg = dbc.Alert(f"Read {len(cols)} columns.", color='success')
+            msg = dbc.Alert(f"Read {len(cols)} columns, {n_samples} samples.", color='success')
             return [options] * n + values + [msg]
 
         @app.callback(
