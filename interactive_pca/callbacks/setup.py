@@ -201,29 +201,85 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
         @app.callback(
             Output({'type': 'setup-arg', 'name': 'eigenvecID'}, 'options'),
             Output({'type': 'setup-arg', 'name': 'eigenvecID'}, 'value'),
+            Output({'type': 'setup-arg', 'name': 'dim'}, 'value'),
             Output('eigenvec-read-status', 'children'),
             Input('read-eigenvec-btn', 'n_clicks'),
             State({'type': 'setup-arg', 'name': 'eigenvec'}, 'value'),
             prevent_initial_call=True,
         )
         def read_eigenvec(_n, path):
+            import re
+            from ..data_loader import auto_detect_dimensions
+
             if not path or not str(path).strip():
-                return no_update, no_update, dbc.Alert('Enter the eigenvec file path.',
-                                                       color='warning')
+                return no_update, no_update, no_update, dbc.Alert(
+                    'Enter the eigenvec file path.', color='warning')
             if not os.path.isfile(path):
-                return no_update, no_update, dbc.Alert(f"File not found: {path}",
-                                                       color='danger')
+                return no_update, no_update, no_update, dbc.Alert(
+                    f"File not found: {path}", color='danger')
             try:
                 df = pd.read_csv(path, sep=r"\s+", nrows=None)
                 cols = list(df.columns)
                 n_samples = len(df)
             except Exception as exc:  # noqa: BLE001
-                return no_update, no_update, dbc.Alert(f"Could not read: {exc}",
-                                                       color='danger')
+                return no_update, no_update, no_update, dbc.Alert(
+                    f"Could not read: {exc}", color='danger')
+
+            # Auto-detect dimensions from all columns (don't exclude any initially)
+            # Find all columns matching PREFIX+number pattern
+            prefix_groups = {}
+            for col in cols:
+                match = re.match(r'^([a-zA-Z]+)(\d+)$', col)
+                if match:
+                    prefix = match.group(1)
+                    number = int(match.group(2))
+                    if prefix not in prefix_groups:
+                        prefix_groups[prefix] = []
+                    prefix_groups[prefix].append((number, col))
+
+            # Find the prefix with most consecutive numbers starting from 1
+            best_prefix = None
+            guessed_dims = []
+            for prefix, number_cols in prefix_groups.items():
+                number_cols.sort()
+                numbers = [n for n, _ in number_cols]
+                if numbers and numbers[0] == 1 and numbers == list(range(1, len(numbers) + 1)):
+                    if len(number_cols) > len(guessed_dims):
+                        best_prefix = prefix
+                        guessed_dims = [col for _, col in number_cols]
+
+            # Determine ID column based on where dimensions start
+            if guessed_dims:
+                first_dim_idx = cols.index(guessed_dims[0])
+                if first_dim_idx == 1:
+                    # Dimensions start in column 2 (index 1), so column 1 (index 0) is ID
+                    id_col = cols[0]
+                elif first_dim_idx == 0:
+                    # Dimensions start in column 1 (index 0), so ID is first column after dims
+                    last_dim_idx = cols.index(guessed_dims[-1])
+                    id_col = cols[last_dim_idx + 1] if last_dim_idx + 1 < len(cols) else cols[0]
+                else:
+                    # Dimensions start later, assume first column is ID
+                    id_col = cols[0]
+            else:
+                # No dimensions detected, use first column as ID
+                id_col = cols[0]
+
+            # Count annotation columns (all columns that aren't ID or dimensions)
+            dim_set = set(guessed_dims)
+            annotation_cols = [c for c in cols if c != id_col and c not in dim_set]
+            n_annotations = len(annotation_cols)
+
+            # Populate dim field only if there are annotations, otherwise leave empty
+            dim_value = ','.join(guessed_dims) if n_annotations > 0 else None
+
+            # Build status message
+            status_parts = [f"Read {len(cols)} columns, {n_samples} samples."]
+            status_parts.append(f"Guessed {len(guessed_dims)} dimensions, {n_annotations} annotations.")
+            status_msg = ' '.join(status_parts)
+
             options = [{'label': c, 'value': c} for c in cols]
-            first = cols[0] if cols else None
-            return options, first, dbc.Alert(
-                f"Read {len(cols)} columns, {n_samples} samples.", color='success')
+            return options, id_col, dim_value, dbc.Alert(status_msg, color='success')
 
         @app.callback(
             Output({'type': 'setup-arg', 'name': 'selectedID'}, 'options'),
