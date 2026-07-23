@@ -43,10 +43,9 @@ def create_parser(script_name='Script'):
                             'dimension columns (e.g. PC1, PC2, PC3), and annotation columns (e.g. Region, Date).')
     parser.add_argument('--eigenvecID', type=str, default=None, metavar="NAME",
                        help='ID column name (e.g. Sample, IID). Default is first column.')
-    parser.add_argument('--dim-pattern', type=str, default=None, metavar="PREFIX",
-                       help='Prefix for dimension columns (e.g. PC, PCA, Component). Auto-detects by finding '
-                            'any prefix followed by increasing numbers. If not found, all non-ID columns '
-                            'are treated as annotations.')
+    parser.add_argument('--dim', type=str, default=None, metavar="COLS",
+                       help='Dimension column names, comma-separated (e.g. PC1,PC2,PC3). '
+                            'If not provided, auto-detects columns with a prefix followed by increasing numbers.')
     parser.add_argument('--selectedID', type=str, default=None, required=False, metavar="IDs",
                        help='Selected samples, given as comma separated IDs, or as a file with each ID on a line (default: all)')
 
