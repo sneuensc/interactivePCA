@@ -184,14 +184,18 @@ def settings_panel(args):
     actions = [a for a in create_parser()._actions
                if a.option_strings and a.dest not in ('help',)
                and a.dest not in PRIMARY_ARGS and a.dest not in _INTERNAL_ARGS]
-    rows = [_labeled_row(a.option_strings[0], _field_component(a, args), a.help)
+    # Strip leading '--' from CLI option names for cleaner display
+    rows = [_labeled_row(a.option_strings[0].lstrip('-'), _field_component(a, args), a.help)
             for a in actions]
     return dbc.Container(
         [
             html.H4('Settings', className='mt-3'),
             html.P('Applied on the next Load, or click Apply to relaunch now.',
                    className='text-muted'),
-            *rows,
+            html.Div(
+                rows,
+                style={'maxHeight': '60vh', 'overflowY': 'auto', 'paddingRight': '8px'},
+            ),
             html.Div(dbc.Button('Apply', id='settings-apply-btn', color='primary',
                                 n_clicks=0), className='mt-3'),
             html.Div(id='settings-status', className='mt-2'),
