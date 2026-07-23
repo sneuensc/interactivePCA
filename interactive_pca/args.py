@@ -39,11 +39,14 @@ def create_parser(script_name='Script'):
 
     # Eigenvectors
     parser.add_argument('--eigenvec', type=str, default=None, required=False, metavar="FILE",
-                       help='Eigenvec file path (plink). Can be a single file containing both dimensions and annotations.')
+                       help='Data file path. Can contain: ID column (1st col, e.g. Sample), '
+                            'dimension columns (e.g. PC1, PC2, PC3), and annotation columns (e.g. Region, Date).')
     parser.add_argument('--eigenvecID', type=str, default=None, metavar="NAME",
-                       help='Eigenvec ID column (default first column)')
-    parser.add_argument('--dim-pattern', type=str, default='PC', metavar="PATTERN",
-                       help='Regex pattern to identify dimension columns (default: PC = matches PC1, PC2, ...)')
+                       help='ID column name (e.g. Sample, IID). Default is first column.')
+    parser.add_argument('--dim-pattern', type=str, default=None, metavar="PREFIX",
+                       help='Prefix for dimension columns (e.g. PC, PCA, Component). Auto-detects by finding '
+                            'any prefix followed by increasing numbers. If not found, all non-ID columns '
+                            'are treated as annotations.')
     parser.add_argument('--selectedID', type=str, default=None, required=False, metavar="IDs",
                        help='Selected samples, given as comma separated IDs, or as a file with each ID on a line (default: all)')
 
