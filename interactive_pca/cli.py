@@ -57,6 +57,19 @@ def print_banner(parsed_args):
     print(f"{sep}\n")
 
 
+def print_setup_banner(url):
+    """Print the startup banner for the setup wizard (no data provided)."""
+    sep = "=" * 60
+    print(f"\n{sep}")
+    print("  🚀  interactivePCA — setup")
+    print(sep)
+    print("\n  No data was provided on the command line.")
+    print("  Open your browser to configure and launch the app:")
+    print(f"      {url}")
+    print(f"\n  Press Ctrl+C to stop the server")
+    print(f"{sep}\n")
+
+
 def main(args=None):
     """
     Main entry point for interactivePCA CLI.
@@ -69,33 +82,33 @@ def main(args=None):
     
     # Setup logging
     setup_logging(parsed_args)
-    
-    # Validate required arguments
-    if not parsed_args.eigenvec:
-        logging.error('Missing required argument: --eigenvec')
-        sys.exit(1)
-    
+
     if parsed_args.dev:
         logging.debug('Development mode activated.')
-    
-    # Import app module (lazy import to avoid circular dependency)
+
+    url = f"http://localhost:{parsed_args.server_port}"
+
+    # One app for both cases: with --eigenvec it builds the full 4-panel app;
+    # without, it starts as a tab shell hosting the file loaders (PCA/Annotation
+    # tabs) that relaunch the process once a file is loaded.
     try:
         from .app import create_app
         app = create_app(parsed_args)
-        
-        url = f"http://localhost:{parsed_args.server_port}"
-        print_banner(parsed_args)
-        
-        if parsed_args.open_browser:
-            import webbrowser
-            webbrowser.open(url)
-        
-        app.run(debug=parsed_args.dev, port=parsed_args.server_port)
-        
     except ImportError as e:
         logging.error(f"App module error: {e}")
         logging.error("Please ensure all dependencies are installed: pip install -e .")
         sys.exit(1)
+
+    if parsed_args.eigenvec:
+        print_banner(parsed_args)
+    else:
+        print_setup_banner(url)
+
+    if parsed_args.open_browser:
+        import webbrowser
+        webbrowser.open(url)
+
+    app.run(debug=parsed_args.dev, port=parsed_args.server_port)
 
 
 if __name__ == '__main__':

@@ -58,6 +58,8 @@ def create_parser(script_name='Script'):
                        help='Time column name')
     parser.add_argument('--group', type=str, default=None, metavar="NAME",
                        help='Grouping/coloring column name')
+    parser.add_argument('--group-shape', type=str, default=None, metavar="NAME",
+                       help='Grouping/shape column name')
 
     # Text handling
     parser.add_argument('--ignore-case', action='store_true', default=False,
@@ -112,6 +114,9 @@ def create_parser(script_name='Script'):
     # Development
     parser.add_argument('--dev', action='store_true', default=False,
                        help='Use development parameters')
+    parser.add_argument('--setup', action='store_true', default=False,
+                       help='Force the setup loader shell even if data is given '
+                            '(used by the Restart button to prefill the loaders)')
     parser.add_argument('--show-all-legends', action='store_true', default=False,
                        help='Show the legends in all figures')
 

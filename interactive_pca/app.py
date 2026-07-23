@@ -10,6 +10,9 @@ from dash import Input, Output
 
 from .data_loader import load_eigenvec, load_annotation, merge_data
 from .plots import set_dataframe
+from .relaunch import schedule_relaunch
+from .callbacks.setup import register_setup_callbacks, _compose_argv
+from .args import create_parser
 from .components import load_aesthetics_file, merge_aesthetics, get_init_aesthetics, register_hover_update_callbacks
 from .layouts import create_layout
 from .callbacks import register_all_callbacks
@@ -28,110 +31,131 @@ def create_app(args):
     """
     logging.info("Creating Dash application...")
     
-    # Load data
-    logging.info("Loading data files...")
-    
-    # Load eigenvectors (required)
-    eigenvec, pcs, eigenvec_id = load_eigenvec(args.eigenvec, args.eigenvecID)
-    
-    # Load annotation
-    annotation = None
-    annotation_desc = None
-    annotation_cols = {}
-    
-    if args.annotation:
-        annotation, annotation_desc, annotation_cols = load_annotation(args.annotation, args)
-    
-    # Merge data
-    df = merge_data(
-        eigenvec,
-        annotation,
-        eigenvec_id_col='id',
-        annotation_id_col=annotation_cols.get('id'),
-        time_col=annotation_cols.get('time'),
-        invert_time=args.time_invert
-    )
-    
-    # Set global DataFrame in plots module
-    set_dataframe(df)
-    
-    # Get annotation columns
-    ANNOTATION_TIME = annotation_cols.get('time')
-    ANNOTATION_LAT = annotation_cols.get('latitude')
-    ANNOTATION_LONG = annotation_cols.get('longitude')
-    show_annotation_table = annotation_desc is not None
-    show_map_plot = (
-        show_annotation_table
-        and ANNOTATION_LAT is not None
-        and ANNOTATION_LONG is not None
-        and ANNOTATION_LAT in df.columns
-        and ANNOTATION_LONG in df.columns
-    )
-    show_time_plot = (
-        show_annotation_table
-        and ANNOTATION_TIME is not None
-        and ANNOTATION_TIME in df.columns
-    )
-    
-    # Initialize selected IDs
-    if args.selectedID:
-        if os.path.isfile(args.selectedID):
-            with open(args.selectedID, 'r') as f:
-                init_selected_ids = [line.rstrip('\n') for line in f]
-        else:
-            init_selected_ids = args.selectedID.split(";")
-        
-        # Filter to valid IDs
-        valid_ids = set(df['id'].tolist())
-        init_selected_ids = [sid for sid in init_selected_ids if sid in valid_ids]
+    # Load data only when an eigenvec is given. Otherwise the app starts as a
+    # tab shell whose PCA/Annotation tabs host the file loaders (see
+    # create_layout and callbacks.setup); the data-dependent callbacks are then
+    # skipped and registered only after the user loads a file (which relaunches).
+    # --setup forces the loader shell even with data given (Restart uses it to
+    # return to the loaders with the previous arguments prefilled).
+    if args.setup or not args.eigenvec:
+        df = None
+        pcs = []
+        annotation = None
+        annotation_desc = None
+        annotation_cols = {}
+        ANNOTATION_TIME = ANNOTATION_LAT = ANNOTATION_LONG = None
+        show_annotation_table = show_map_plot = show_time_plot = False
+        init_selected_ids = []
+        dropdown_group_list = ['none']
+        dropdown_group_symbol_list = ['none']
+        dropdown_list_continuous = []
+        init_group = 'none'
+        init_continuous = None
+        init_aesthetics = {}
     else:
-        init_selected_ids = df['id'].tolist()
-    
-    logging.info(f"Selected {len(init_selected_ids)} of {len(df)} samples")
-    
-    # Initialize grouping options
-    dropdown_group_list = ['none']
-    dropdown_group_symbol_list = ['none']
-    if annotation_desc is not None:
-        # Add columns suitable for grouping
-        grouping_cols = annotation_desc.loc[
-            annotation_desc['Dropdown'] == 'Yes',
-            'Abbreviation'
-        ].tolist()
-        dropdown_group_list.extend(grouping_cols)
-        # Shape grouping: categorical columns only (no PCs, no continuous)
-        dropdown_group_symbol_list.extend(
-            col for col in grouping_cols
-            if col in df.columns and df[col].dtype.kind not in 'fi'
+        logging.info("Loading data files...")
+
+        # Load eigenvectors (required)
+        eigenvec, pcs, eigenvec_id = load_eigenvec(args.eigenvec, args.eigenvecID)
+
+        # Load annotation
+        annotation = None
+        annotation_desc = None
+        annotation_cols = {}
+
+        if args.annotation:
+            annotation, annotation_desc, annotation_cols = load_annotation(args.annotation, args)
+
+        # Merge data
+        df = merge_data(
+            eigenvec,
+            annotation,
+            eigenvec_id_col='id',
+            annotation_id_col=annotation_cols.get('id'),
+            time_col=annotation_cols.get('time'),
+            invert_time=args.time_invert
         )
 
-    # Include PCs as grouping options (color only, not shape)
-    for pc in pcs:
-        if pc not in dropdown_group_list:
-            dropdown_group_list.append(pc)
-    
-    init_group = args.group if args.group and args.group in dropdown_group_list else dropdown_group_list[0]
-    
-    # Initialize continuous variable options
-    dropdown_list_continuous = []
-    init_continuous = ANNOTATION_TIME
-    if annotation_desc is not None:
-        dropdown_list_continuous = annotation_desc.loc[
-            annotation_desc['Type'] == 'continuous',
-            'Abbreviation'
-        ].tolist()
-        if dropdown_list_continuous and ANNOTATION_TIME not in dropdown_list_continuous:
-            init_continuous = dropdown_list_continuous[0] if dropdown_list_continuous else None
-    
-    # Initialize aesthetics from parameters
-    init_aesthetics = get_init_aesthetics(args, init_group, df)
-    
-    # Load aesthetics from file if provided (overrides parameter defaults)
-    if args.aesthetics_file:
-        file_aesthetics = load_aesthetics_file(args.aesthetics_file)
-        if file_aesthetics and init_group in file_aesthetics:
-            # Merge file aesthetics with parameter-based defaults
-            init_aesthetics = merge_aesthetics(init_aesthetics, file_aesthetics[init_group])
+        # Set global DataFrame in plots module
+        set_dataframe(df)
+
+        # Get annotation columns
+        ANNOTATION_TIME = annotation_cols.get('time')
+        ANNOTATION_LAT = annotation_cols.get('latitude')
+        ANNOTATION_LONG = annotation_cols.get('longitude')
+        show_annotation_table = annotation_desc is not None
+        show_map_plot = (
+            show_annotation_table
+            and ANNOTATION_LAT is not None
+            and ANNOTATION_LONG is not None
+            and ANNOTATION_LAT in df.columns
+            and ANNOTATION_LONG in df.columns
+        )
+        show_time_plot = (
+            show_annotation_table
+            and ANNOTATION_TIME is not None
+            and ANNOTATION_TIME in df.columns
+        )
+
+        # Initialize selected IDs
+        if args.selectedID:
+            if os.path.isfile(args.selectedID):
+                with open(args.selectedID, 'r') as f:
+                    init_selected_ids = [line.rstrip('\n') for line in f]
+            else:
+                init_selected_ids = args.selectedID.split(";")
+
+            # Filter to valid IDs
+            valid_ids = set(df['id'].tolist())
+            init_selected_ids = [sid for sid in init_selected_ids if sid in valid_ids]
+        else:
+            init_selected_ids = df['id'].tolist()
+
+        logging.info(f"Selected {len(init_selected_ids)} of {len(df)} samples")
+
+        # Initialize grouping options
+        dropdown_group_list = ['none']
+        dropdown_group_symbol_list = ['none']
+        if annotation_desc is not None:
+            # Add columns suitable for grouping
+            grouping_cols = annotation_desc.loc[
+                annotation_desc['Dropdown'] == 'Yes',
+                'Abbreviation'
+            ].tolist()
+            dropdown_group_list.extend(grouping_cols)
+            # Shape grouping: categorical columns only (no PCs, no continuous)
+            dropdown_group_symbol_list.extend(
+                col for col in grouping_cols
+                if col in df.columns and df[col].dtype.kind not in 'fi'
+            )
+
+        # Include PCs as grouping options (color only, not shape)
+        for pc in pcs:
+            if pc not in dropdown_group_list:
+                dropdown_group_list.append(pc)
+
+        init_group = args.group if args.group and args.group in dropdown_group_list else dropdown_group_list[0]
+
+        # Initialize continuous variable options
+        dropdown_list_continuous = []
+        init_continuous = ANNOTATION_TIME
+        if annotation_desc is not None:
+            dropdown_list_continuous = annotation_desc.loc[
+                annotation_desc['Type'] == 'continuous',
+                'Abbreviation'
+            ].tolist()
+            if dropdown_list_continuous and ANNOTATION_TIME not in dropdown_list_continuous:
+                init_continuous = dropdown_list_continuous[0] if dropdown_list_continuous else None
+
+        # Initialize aesthetics from parameters
+        init_aesthetics = get_init_aesthetics(args, init_group, df)
+
+        # Load aesthetics from file if provided (overrides parameter defaults)
+        if args.aesthetics_file:
+            file_aesthetics = load_aesthetics_file(args.aesthetics_file)
+            if file_aesthetics and init_group in file_aesthetics:
+                # Merge file aesthetics with parameter-based defaults
+                init_aesthetics = merge_aesthetics(init_aesthetics, file_aesthetics[init_group])
     
     # Create Dash app
     app = dash.Dash(
@@ -156,7 +180,7 @@ def create_app(args):
         """
         function(active_tab) {
             // Hide all tab content divs
-            const tabs = ['pca_tab', 'annotation_tab', 'help_tab'];
+            const tabs = ['pca_tab', 'annotation_tab', 'settings_tab', 'help_tab'];
             tabs.forEach(function(tab) {
                 const el = document.getElementById(tab + '_content');
                 if (el) {
@@ -267,6 +291,25 @@ def create_app(args):
     
     # ── Snapshot export ───────────────────────────────────────────────────
     register_snapshot_callback(app)
+
+    # ── Restart ─────────────────────────────────────────────────────────────
+    # Relaunch the process with no data (just the port) to return to the setup
+    # tab shell. The reload poller is registered in register_setup_callbacks.
+    @app.callback(
+        Output('relaunch-store', 'data', allow_duplicate=True),
+        Input('restart-btn', 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def _restart(n_clicks):
+        if not n_clicks:
+            return dash.no_update
+        port = getattr(args, 'server_port', 8050)
+        # Relaunch into the loader shell with the previous arguments prefilled.
+        values = {a.dest: getattr(args, a.dest, None)
+                  for a in create_parser()._actions
+                  if a.option_strings and a.dest not in ('help', 'setup')}
+        schedule_relaunch(_compose_argv(values) + ['--setup'])
+        return {'go': True, 'port': port}
 
     # ── Map shape icons ─────────────────────────────────────────────────────
     # The MapLibre basemap ships no sprite, so non-'circle' marker symbols
@@ -538,22 +581,32 @@ def create_app(args):
         prevent_initial_call='initial_duplicate'
     )
 
-    # Register hover update callbacks (factory pattern)
-    register_hover_update_callbacks(
-        app,
-        args,
-        df,
-        annotation_desc,
-        show_map_plot=show_map_plot,
-        show_time_plot=show_time_plot,
-        show_annotation_table=show_annotation_table,
+    # File-loader callbacks (eigenvec / annotation loaders + Settings). Shown as
+    # tab content wherever data is missing; each Load relaunches the process.
+    register_setup_callbacks(
+        app, args,
+        show_eigenvec_loader=df is None,
+        show_annotation_loader=annotation_desc is None,
     )
-    
-    # Register all application callbacks
-    register_all_callbacks(
-        app, args, df, pcs, annotation_desc,
-        ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG
-    )
-    
+
+    # Data-dependent callbacks need the DataFrame; skip them until data is loaded.
+    if df is not None:
+        # Register hover update callbacks (factory pattern)
+        register_hover_update_callbacks(
+            app,
+            args,
+            df,
+            annotation_desc,
+            show_map_plot=show_map_plot,
+            show_time_plot=show_time_plot,
+            show_annotation_table=show_annotation_table,
+        )
+
+        # Register all application callbacks
+        register_all_callbacks(
+            app, args, df, pcs, annotation_desc,
+            ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG
+        )
+
     logging.info("Dash application created successfully")
     return app
