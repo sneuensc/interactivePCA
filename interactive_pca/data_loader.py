@@ -4,24 +4,75 @@ Data loading and preprocessing module.
 
 import logging
 import os
+import re
 import pandas as pd
 from .utils import make_unique_abbr, make_unique_abbr_of_df, get_abbr_of, deduplicate_columns, find_incrementing_prefix_series
 
 
-def load_eigenvec(filepath, id_column=None):
+def auto_detect_dimensions(columns, id_col):
     """
-    Load PLINK eigenvec file (eigenvectors).
-    
+    Auto-detect dimension columns by finding a prefix followed by consecutive increasing numbers.
+
+    Looks for patterns like PC1, PC2, PC3, ... or PCA1, PCA2, ... where the prefix appears
+    multiple times with numeric suffixes in increasing order.
+
+    Args:
+        columns: List of column names
+        id_col: Name of ID column (to skip)
+
+    Returns:
+        List of dimension column names, or empty list if no pattern found
+    """
+    if not columns or id_col not in columns:
+        return []
+
+    # Filter out ID column
+    cols_to_check = [c for c in columns if c != id_col]
+
+    # Group columns by prefix + number pattern
+    prefix_groups = {}
+    for col in cols_to_check:
+        match = re.match(r'^([a-zA-Z]+)(\d+)$', col)
+        if match:
+            prefix = match.group(1)
+            number = int(match.group(2))
+            if prefix not in prefix_groups:
+                prefix_groups[prefix] = []
+            prefix_groups[prefix].append((number, col))
+
+    # Find the prefix with the most consecutive numbers starting from 1
+    best_prefix = None
+    best_cols = []
+
+    for prefix, number_cols in prefix_groups.items():
+        number_cols.sort()  # Sort by number
+        # Check if numbers are consecutive starting from 1
+        numbers = [n for n, _ in number_cols]
+        if numbers and numbers[0] == 1 and numbers == list(range(1, len(numbers) + 1)):
+            # Found a valid sequence
+            if len(number_cols) > len(best_cols):
+                best_prefix = prefix
+                best_cols = [col for _, col in number_cols]
+
+    return best_cols
+
+
+def load_eigenvec(filepath, id_column=None, dim=None):
+    """
+    Load eigenvec file (eigenvectors and optionally annotation data in a single file).
+
     Args:
         filepath: Path to eigenvec file
         id_column: Name of ID column (default: first column)
-    
+        dim: Comma-separated dimension column names (e.g. "PC1,PC2,PC3").
+             If not provided, auto-detects columns with pattern PREFIX1, PREFIX2, ...
+
     Returns:
         Tuple of (eigenvec_df, pc_list, id_column_name)
     """
     logging.info(f"Reading eigenvec file '{filepath}' ...")
     eigenvec = pd.read_csv(filepath, sep=r"\s+", header=0)
-    
+
     # Determine ID column
     eigenvec_id = id_column if id_column is not None else eigenvec.columns[0]
     if eigenvec_id != "id":
@@ -32,16 +83,29 @@ def load_eigenvec(filepath, id_column=None):
         dup_ids = eigenvec.loc[eigenvec["id"].duplicated(), "id"].astype(str).unique()[:10]
         logging.error("Eigenvec IDs are not unique. Examples: %s", ", ".join(dup_ids))
         raise ValueError("Eigenvec IDs are not unique. Please provide a file with unique IDs.")
-    
-    # Find PC columns
-    pcs = find_incrementing_prefix_series(eigenvec.columns)
-    
+
+    # Find or use provided dimension columns
+    if dim:
+        # User provided explicit dimension columns
+        pcs = [col.strip() for col in dim.split(',')]
+        # Validate that columns exist
+        missing = [col for col in pcs if col not in eigenvec.columns]
+        if missing:
+            raise ValueError(f"Dimension columns not found in file: {', '.join(missing)}")
+        logging.info(f"   Using provided dimension columns: {', '.join(pcs)}")
+    else:
+        # Auto-detect dimension columns
+        pcs = auto_detect_dimensions(list(eigenvec.columns), "id")
+        if not pcs:
+            # Fallback to the original method
+            pcs = find_incrementing_prefix_series(eigenvec.columns)
+        if pcs:
+            logging.info(f"   Auto-detected {len(pcs)} dimension columns ({', '.join(pcs[:2])}, ...).")
+
     if len(pcs) < 2:
         logging.error(f'Not enough dimension columns found in the eigenvec file ({len(pcs)} found).')
-        raise ValueError(f"Need at least 2 PCs, found {len(pcs)}")
-    
-    logging.info(f"   Found {len(pcs)} principal components ({', '.join(pcs[:2])}, ...).")
-    
+        raise ValueError(f"Need at least 2 dimension columns, found {len(pcs)}")
+
     logging.info(f"Reading eigenvec file '{filepath}' ... done.")
     return eigenvec, pcs, "id"
 

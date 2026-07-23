@@ -56,7 +56,7 @@ def create_app(args):
         logging.info("Loading data files...")
 
         # Load eigenvectors (required)
-        eigenvec, pcs, eigenvec_id = load_eigenvec(args.eigenvec, args.eigenvecID)
+        eigenvec, pcs, eigenvec_id = load_eigenvec(args.eigenvec, args.eigenvecID, args.dim)
 
         # Load annotation
         annotation = None

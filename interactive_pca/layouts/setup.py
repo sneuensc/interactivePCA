@@ -21,7 +21,7 @@ from ..args import create_parser, float_0_1
 
 
 # Field groupings by CLI dest.
-EIGENVEC_FIELDS = ['eigenvec', 'eigenvecID', 'selectedID']
+EIGENVEC_FIELDS = ['eigenvec', 'dim', 'eigenvecID', 'selectedID']
 ANNOTATION_DEPENDENT = ['annotationID', 'latitude', 'longitude', 'time', 'group', 'group_shape']
 ANNOTATION_FIELDS = ['annotation'] + ANNOTATION_DEPENDENT
 PRIMARY_ARGS = EIGENVEC_FIELDS + ANNOTATION_FIELDS
@@ -136,6 +136,8 @@ def eigenvec_loader_panel(args):
             html.Div(dbc.Button('Read', id='read-eigenvec-btn', color='secondary',
                                 n_clicks=0), className='my-2'),
             html.Div(id='eigenvec-read-status', className='mb-2'),
+            _labeled_row('Dimension columns', _field_component(by['dim'], args),
+                         'Comma-separated (e.g., PC1,PC2,PC3). Auto-detects if left empty.'),
             _labeled_row('Eigenvec ID column', eigenvec_id_dd,
                          'Defaults to the first column.'),
             _labeled_row('Selected IDs', selected_dd,
