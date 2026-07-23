@@ -26,6 +26,13 @@ from ..components import (
     merge_aesthetics,
     get_init_aesthetics
 )
+from .setup import (
+    eigenvec_loader_panel,
+    annotation_loader_panel,
+    settings_panel,
+    file_browser_modal,
+    setup_stores,
+)
 
 
 def create_layout(args, df, pcs,
@@ -75,7 +82,12 @@ def create_layout(args, df, pcs,
     # Include PCs as continuous variables
     continuous_columns.extend([pc for pc in pcs if pc not in continuous_columns])
 
-    # PCA tab (always present)
+    # Initial "Shape by" grouping from --group-shape (mirrors --group handling).
+    init_group_symbol = getattr(args, 'group_shape', None)
+    if not init_group_symbol or init_group_symbol not in (dropdown_group_symbol_list or []):
+        init_group_symbol = 'none'
+
+    # PCA tab (always present): the plots, or the eigenvec loader if no data yet.
     tab_configs.append({
         'label': 'PCA',
         'value': 'pca_tab',
@@ -83,17 +95,25 @@ def create_layout(args, df, pcs,
             pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
             df, init_aesthetics, ANNOTATION_LONG, annotation_columns, continuous_columns, annotation_desc,
             init_selected_ids,
-            dropdown_group_symbol_list=dropdown_group_symbol_list or dropdown_group_list
-        )
+            dropdown_group_symbol_list=dropdown_group_symbol_list or dropdown_group_list,
+            init_group_symbol=init_group_symbol,
+        ) if df is not None else eigenvec_loader_panel(args)
     })
-    
-    # Annotation tab
-    if annotation_desc is not None:
-        tab_configs.append({
-            'label': 'Annotation',
-            'value': 'annotation_tab',
-            'content': create_annotation_tab(annotation_desc, annotation_columns, pcs)
-        })
+
+    # Annotation tab (always present): the table, or the annotation loader.
+    tab_configs.append({
+        'label': 'Annotation',
+        'value': 'annotation_tab',
+        'content': create_annotation_tab(annotation_desc, annotation_columns, pcs)
+                   if annotation_desc is not None else annotation_loader_panel(args)
+    })
+
+    # Settings tab (always present): the other CLI options.
+    tab_configs.append({
+        'label': 'Settings',
+        'value': 'settings_tab',
+        'content': settings_panel(args)
+    })
     
     # Help tab
     from ..args import create_parser
@@ -250,6 +270,9 @@ def create_layout(args, df, pcs,
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         dcc.Store(id='map-view-store', data=None),  # Current map view bbox, preserved across basemap toggle
         dcc.Store(id='map-fill-dummy', data=None),  # Dummy output for the geo pane-fill clientside callback
+        # File-loader stores + browser modal (Restart and the tab loaders relaunch through these)
+        *setup_stores(),
+        file_browser_modal(),
         dcc.Download(id='download-snapshot'),
         
         # Header with tabs
@@ -293,6 +316,12 @@ def create_layout(args, df, pcs,
                     'verticalAlign': 'bottom'
                 }
             ),
+            # Restart → relaunch the process with no data → the setup wizard.
+            dbc.Button(
+                'Restart', id='restart-btn', color='danger', outline=True,
+                size='sm', n_clicks=0, title='Return to the setup page',
+                style={'float': 'right', 'marginRight': '20px', 'marginTop': '14px'},
+            ),
         ], style={
             'backgroundColor': '#f8f9fa',
             'borderBottom': '2px solid #dee2e6',
@@ -329,7 +358,7 @@ def create_layout(args, df, pcs,
 
 def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
                    df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None, init_selected_ids=None,
-                   dropdown_group_symbol_list=None):
+                   dropdown_group_symbol_list=None, init_group_symbol='none'):
     """Create PCA tab layout with map on the right and extra panels below."""
     # Determine if legend should be shown initially (only if group has multiple unique values)
     init_show_legend = []
@@ -440,7 +469,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 dcc.Dropdown(
                     id='dropdown-group-symbol',
                     options=[{'label': g, 'value': g} for g in (dropdown_group_symbol_list or dropdown_group_list)],
-                    value='none',
+                    value=init_group_symbol,
                     clearable=False,
                     style={'width': '200px'}
                 ),
