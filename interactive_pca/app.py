@@ -9,10 +9,11 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output
 
-from .data_loader import load_eigenvec, load_annotation, merge_data
+from .data_loader import load_eigenvec, load_annotation, merge_data, resolve_annotation_columns
 from .plots import set_dataframe
 from .relaunch import schedule_relaunch
 from .callbacks.setup import register_setup_callbacks, _compose_argv
+from .layouts.setup import PRIMARY_ARGS
 from .args import create_parser
 from .components import load_aesthetics_file, merge_aesthetics, get_init_aesthetics, register_hover_update_callbacks
 from .layouts import create_layout
@@ -53,6 +54,7 @@ def create_app(args):
         init_group = 'none'
         init_continuous = None
         init_aesthetics = {}
+        has_embedded_annotation_cols = False
     else:
         logging.info("Loading data files...")
 
@@ -63,21 +65,44 @@ def create_app(args):
         annotation = None
         annotation_desc = None
         annotation_cols = {}
+        # Whether the Annotation tab's "Use annotations from eigenvec file" button
+        # has anything to offer — only relevant while that tab still shows its
+        # loader (annotation_desc is None); stays False once real annotation data
+        # (from either branch below) is actually loaded.
+        has_embedded_annotation_cols = False
 
         if args.annotation:
             annotation, annotation_desc, annotation_cols = load_annotation(args.annotation, args)
+            # The eigenvec file may itself carry extra (non-ID, non-dimension)
+            # columns (e.g. it was also usable in single-file mode). Since a real
+            # annotation file was given instead, drop those here rather than
+            # merging them in — otherwise a same-named column in both (e.g.
+            # "Region" in both the eigenvec file and the annotation file) gets
+            # silently suffixed _x/_y by the join, and every group/aesthetic/map
+            # lookup by that plain name breaks.
+            eigenvec = eigenvec[['id'] + pcs]
+        elif args.ignore_embedded_annotation:
+            # The PCA tab's own "Load" button relaunches with this set, so a plain
+            # eigenvec load stays coordinates-only even if the file has extra
+            # columns — the Annotation tab is where the user opts into them.
+            dim_set = set(pcs)
+            annot_cols = [c for c in eigenvec.columns if c != 'id' and c not in dim_set]
+            has_embedded_annotation_cols = bool(annot_cols)
+            if annot_cols:
+                logging.info(f"   {len(annot_cols)} extra column(s) in the eigenvec file were "
+                             f"not loaded as annotation — use the Annotation tab to load them.")
         else:
-            # Single-file mode: eigenvec already has annotation columns if they exist
-            # Extract them from the eigenvec dataframe (all non-ID, non-dimension columns)
+            # Single-file mode: eigenvec already has annotation columns if they exist.
+            # They live in the same table as the dimensions (one row per sample), so
+            # there is nothing to merge — rename them to their abbreviations in place
+            # and describe them the same way load_annotation() would. `annotation`
+            # stays None: merge_data() then uses eigenvec as-is, avoiding a self-join
+            # that would otherwise duplicate every annotation column as _x/_y.
             dim_set = set(pcs)
             annot_cols = [c for c in eigenvec.columns if c != 'id' and c not in dim_set]
             if annot_cols:
-                # Create annotation dataframe from the eigenvec file
-                annotation = eigenvec[['id'] + annot_cols].copy()
-                # Rename annotation columns to match eigenvec naming (abbreviated)
                 from .utils import make_unique_abbr
                 abbrev = make_unique_abbr(annot_cols, max_length=args.col_abbrev)
-                annotation.rename(columns=dict(zip(annot_cols, abbrev)), inplace=True)
                 # Create annotation_desc
                 annotation_desc = pd.DataFrame({
                     'Abbreviation': abbrev,
@@ -93,8 +118,16 @@ def create_app(args):
                     else ''
                     for typ, nlev in zip(annotation_desc['Type'], annotation_desc['N_levels'])
                 ]
-                annotation_cols['id'] = 'id'
+                eigenvec.rename(columns=dict(zip(annot_cols, abbrev)), inplace=True)
+                annotation_cols.update(
+                    resolve_annotation_columns(annotation_desc, args, default_id='id')
+                )
                 logging.info(f"   Extracted {len(annot_cols)} annotation columns from eigenvec file.")
+                if 'longitude' in annotation_cols and 'latitude' in annotation_cols:
+                    logging.info(f"   Found geographic coordinates: lat='{annotation_cols['latitude']}', "
+                                 f"lon='{annotation_cols['longitude']}'.")
+                if 'time' in annotation_cols:
+                    logging.info(f"   Found time column: '{annotation_cols['time']}'.")
 
         # Merge data
         df = merge_data(
@@ -200,7 +233,8 @@ def create_app(args):
         annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
         init_selected_ids, init_group, init_continuous, init_aesthetics,
         dropdown_group_list, dropdown_list_continuous,
-        dropdown_group_symbol_list=dropdown_group_symbol_list
+        dropdown_group_symbol_list=dropdown_group_symbol_list,
+        has_embedded_annotation_cols=has_embedded_annotation_cols
     )
     app.layout = layout_data['layout']
     tab_content_map = layout_data['tab_content_map']
@@ -334,11 +368,20 @@ def create_app(args):
         if not n_clicks:
             return dash.no_update
         port = getattr(args, 'server_port', 8050)
-        # Relaunch into the loader shell with the previous arguments prefilled.
+        # Relaunch into an empty loader shell — identical to starting the
+        # server fresh with no data arguments (just the file-path inputs, no
+        # prefilled columns/Load button). Non-data settings (port, --dev,
+        # point styling, ...) carry over; only the eigenvec/annotation fields
+        # are dropped.
         values = {a.dest: getattr(args, a.dest, None)
                   for a in create_parser()._actions
-                  if a.option_strings and a.dest not in ('help', 'setup')}
-        schedule_relaunch(_compose_argv(values) + ['--setup'])
+                  if a.option_strings and a.dest not in ('help', 'setup')
+                  and a.dest not in PRIMARY_ARGS}
+        argv = _compose_argv(values) + ['--setup']
+        # Ensure server_port is always included in the relaunch
+        if '--server-port' not in argv:
+            argv.extend(['--server-port', str(port)])
+        schedule_relaunch(argv)
         return {'go': True, 'port': port}
 
     # ── Map shape icons ─────────────────────────────────────────────────────
@@ -617,6 +660,7 @@ def create_app(args):
         app, args,
         show_eigenvec_loader=df is None,
         show_annotation_loader=annotation_desc is None,
+        show_embedded_annotation_button=has_embedded_annotation_cols,
     )
 
     # Data-dependent callbacks need the DataFrame; skip them until data is loaded.

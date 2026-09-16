@@ -52,6 +52,14 @@ def create_parser(script_name='Script'):
     # Annotation
     parser.add_argument('--annotation', type=str, default=None, metavar="FILE",
                        help='Annotation file path')
+    # Internal: set only by the PCA tab's own "Load" button (never by plain CLI use
+    # or shown in --help/Settings). By default, extra (non-ID, non-dimension)
+    # columns in --eigenvec are used as annotation whenever --annotation is empty.
+    # This skips that for one specific relaunch, so loading via the PCA tab gives
+    # coordinates only; the Annotation tab's "Use annotations from eigenvec file"
+    # clears it again on its own relaunch.
+    parser.add_argument('--ignore-embedded-annotation', action='store_true',
+                       default=False, help=argparse.SUPPRESS)
     parser.add_argument('--annotationID', type=str, default='Genetic ID', metavar="NAME",
                        help='Annotation ID column (default first column)')
     parser.add_argument('--longitude', type=str, default=None, metavar="NAME",

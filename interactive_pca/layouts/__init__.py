@@ -39,7 +39,7 @@ def create_layout(args, df, pcs,
                  annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
                  init_selected_ids, init_group, init_continuous, init_aesthetics,
                  dropdown_group_list, dropdown_list_continuous,
-                 dropdown_group_symbol_list=None):
+                 dropdown_group_symbol_list=None, has_embedded_annotation_cols=False):
     """
     Create the main application layout.
     
@@ -105,7 +105,8 @@ def create_layout(args, df, pcs,
         'label': 'Annotation',
         'value': 'annotation_tab',
         'content': create_annotation_tab(annotation_desc, annotation_columns, pcs)
-                   if annotation_desc is not None else annotation_loader_panel(args)
+                   if annotation_desc is not None
+                   else annotation_loader_panel(args, has_embedded_annotation_cols)
     })
 
     # Settings tab (always present): the other CLI options.
@@ -802,7 +803,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             rowData=table_data,
             columnDefs=column_defs,
             defaultColDef={'resizable': True, 'sortable': True, 'filter': True},
-            getRowId={'function': 'params.data.id'},
+            getRowId='params.data.id',
             dashGridOptions={
                 'pagination': True,
                 'paginationPageSize': 20,
