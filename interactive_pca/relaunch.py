@@ -27,9 +27,20 @@ def schedule_relaunch(argv, delay=0.8):
     logging.info("Relaunching: %s", ' '.join(cmd))
     inner = ' '.join(shlex.quote(x) for x in cmd)
 
+    # Under --dev, Werkzeug's own reloader stamps WERKZEUG_RUN_MAIN/
+    # WERKZEUG_SERVER_FD onto this process's environment so it can hand its
+    # bound socket to its restarted child. That fd is meaningless to our own
+    # freshly spawned process (a new session, not a Werkzeug-reloaded child),
+    # so inheriting it makes the child try to rebuild a socket from a stale fd
+    # number and crash with "Socket operation on non-socket". Strip them so
+    # the child starts exactly as if launched fresh from a terminal.
+    env = os.environ.copy()
+    env.pop('WERKZEUG_RUN_MAIN', None)
+    env.pop('WERKZEUG_SERVER_FD', None)
+
     def _relaunch():
         subprocess.Popen(['/bin/sh', '-c', f'sleep 1; exec {inner}'],
-                         start_new_session=True)
+                         start_new_session=True, env=env)
         os._exit(0)
 
     # Fire after the HTTP response has been flushed to the browser.
@@ -44,12 +55,33 @@ function(data) {
     var url = window.location.protocol + '//' + window.location.hostname
               + ':' + data.port + '/';
     var tries = 0;
+    var maxTries = 60;
     var iv = setInterval(function() {
         tries++;
         fetch(url, {mode: 'no-cors', cache: 'no-store'})
-            .then(function() { clearInterval(iv); window.location.href = url; })
+            .then(function() {
+                clearInterval(iv);
+                console.log('Server is up, reloading in 2 seconds...');
+                setTimeout(function() {
+                    console.log('Reloading now');
+                    window.location.href = url;
+                }, 2000);
+            })
             .catch(function() { /* server still restarting */ });
-        if (tries > 120) { clearInterval(iv); }
+        if (tries > maxTries) {
+            clearInterval(iv);
+            // Give up silently on a hung "Starting..." message: the process
+            // most likely crashed on startup (a data-loading error, say), and
+            // without this the page just waits forever with no feedback.
+            var banner = document.createElement('div');
+            banner.textContent = 'The server did not come back after ' + maxTries +
+                ' seconds — it may have crashed while restarting. Check the ' +
+                'terminal/log for a traceback, fix the issue, then reload this page.';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+                'background:#f8d7da;color:#842029;padding:12px 20px;' +
+                'font:14px -apple-system,sans-serif;border-bottom:2px solid #f5c2c7;';
+            document.body.prepend(banner);
+        }
     }, 1000);
     return window.dash_clientside.no_update;
 }

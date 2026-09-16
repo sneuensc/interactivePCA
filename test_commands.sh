@@ -21,4 +21,11 @@ interactive-pca \
 	
 	
 	
+interactive-pca \
+	--eigenvec data-lucas/coord.tsv \
+	--server-port 8051  \
+	--annotation data-lucas/annot.tsv \
+	--longitude long \
+	--latitude lat \
+	--time date
 	
