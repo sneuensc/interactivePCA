@@ -10,11 +10,17 @@ Scatter / Scattergl (PCA, time):
     restore.  Fx.hover renders the tooltip synchronously, so the restore
     happens after the DOM is already updated — the tooltip stays minimal.
 
-Scattermap (map):
+Scattermap / Scattergeo (map):
   - Reposition the __hover_highlight__ ring trace.
-  - Use Plotly.Fx.loneHover on the map subplot's _hoverlayer SVG with
-    canvas pixel coordinates from mapGL.project([lon, lat]).
-    loneHover bypasses nearest-trace search entirely.
+  - Use Plotly.Fx.loneHover on the subplot's _hoverlayer SVG with pixel
+    coordinates — mapGL.project([lon, lat]) for GL maps, the d3-geo
+    projection for scattergeo. loneHover bypasses nearest-trace search.
+
+Coordinates
+-----------
+Plotly ships numeric columns base64-packed as {dtype, bdata, _inputArray},
+so trace.x[i] / trace.x.length are undefined on them. Always read point
+coordinates through coordAt(), never by indexing the array directly.
 """
 
 from dash import Input, Output
@@ -72,10 +78,47 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
             return -1;
         }}
 
+        // Numeric columns arrive base64-packed as {{dtype, bdata, _inputArray}}
+        // (Plotly's binary transport), so `arr[i]` and `arr.length` are undefined
+        // on them — the decoded values live in _inputArray.
+        function coordAt(arr, i) {{
+            if (!arr || i == null || i < 0) return null;
+            var vals = Array.isArray(arr) ? arr
+                     : (arr._inputArray ||
+                        (typeof arr.length === 'number' ? arr : null));
+            if (!vals || i >= vals.length) return null;
+            var v = vals[i];
+            if (v === undefined || v === null) return null;
+            return (typeof v === 'number' && isNaN(v)) ? null : v;
+        }}
+
+        function isGeoPlot(plotDiv) {{
+            return plotDiv.data.some(function(d) {{ return d.type === 'scattergeo'; }});
+        }}
+
         function isMapPlot(plotDiv) {{
             return plotDiv.data.some(function(d) {{
-                return d.type === 'scattermap' || d.type === 'scattermapbox';
+                return d.type === 'scattermap' || d.type === 'scattermapbox'
+                    || d.type === 'scattergeo';
             }});
+        }}
+
+        // Geo subplots project with d3-geo instead of a GL map object.
+        function getGeoSubplot(plotDiv, trace) {{
+            var key = (trace && trace.geo) || 'geo';
+            var geo = plotDiv._fullLayout && plotDiv._fullLayout[key];
+            return (geo && geo._subplot && geo._subplot.projection) ? geo : null;
+        }}
+
+        // Geo has no _hoverlayer of its own — fall back to the figure's.
+        function getHoverContainer(plotDiv, trace) {{
+            var fl = plotDiv._fullLayout;
+            if (!fl) return null;
+            var key = (trace && (trace.subplot || trace.geo))
+                      || (isGeoPlot(plotDiv) ? 'geo' : 'map');
+            var layer = (fl[key] && fl[key]._hoverlayer) || fl._hoverlayer;
+            if (!layer) return null;
+            return layer.node ? layer.node() : layer;
         }}
 
         function getMapGL(plotDiv) {{
@@ -107,16 +150,16 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                 Plotly.restyle(plotDiv, {{lat: [[]], lon: [[]]}}, [hlIdx]);
                 try {{
                     var mapTrace = plotDiv.data.find(function(d) {{
-                        return d.type === 'scattermap' || d.type === 'scattermapbox';
+                        return d.type === 'scattermap' || d.type === 'scattermapbox'
+                            || d.type === 'scattergeo';
                     }});
-                    var mapKey = getMapKey(plotDiv, mapTrace);
-                    var hoverLayer = plotDiv._fullLayout[mapKey] &&
-                                     plotDiv._fullLayout[mapKey]._hoverlayer;
-                    if (hoverLayer && Plotly.Fx.loneUnhover) {{
-                        Plotly.Fx.loneUnhover(hoverLayer.node());
-                    }} else {{
+                    var container = getHoverContainer(plotDiv, mapTrace);
+                    if (container && Plotly.Fx.loneUnhover) {{
+                        Plotly.Fx.loneUnhover(container);
+                    }} else if (!isGeoPlot(plotDiv)) {{
                         window._hoverSyncSkip = plotId;
-                        Plotly.Fx.hover(plotDiv, {{clientX: -9999, clientY: -9999}}, mapKey);
+                        Plotly.Fx.hover(plotDiv, {{clientX: -9999, clientY: -9999}},
+                                        getMapKey(plotDiv, mapTrace));
                     }}
                 }} catch(e) {{}}
             }} else {{
@@ -159,30 +202,34 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
 
             // ── MAP ──────────────────────────────────────────────────────────
             if (isMapPlot(plotDiv)) {{
-                var lat = null, lon = null;
-                if (trace.lat && trace.lat[foundPoint] != null) {{
-                    lat = trace.lat[foundPoint];  lon = trace.lon[foundPoint];
-                }}
+                var lat = coordAt(trace.lat, foundPoint);
+                var lon = coordAt(trace.lon, foundPoint);
                 if ((lat == null || lon == null) && plotDiv._fullData &&
                         plotDiv._fullData[foundTrace]) {{
                     var fd = plotDiv._fullData[foundTrace];
-                    if (lat == null && fd.lat) lat = fd.lat[foundPoint];
-                    if (lon == null && fd.lon) lon = fd.lon[foundPoint];
+                    if (lat == null) lat = coordAt(fd.lat, foundPoint);
+                    if (lon == null) lon = coordAt(fd.lon, foundPoint);
                 }}
-                if (lat == null || lon == null) return;
+                if (lat == null || lon == null) {{ clearHighlight(plotId); return; }}
 
                 // Visual ring
                 Plotly.restyle(plotDiv, {{lat: [[lat]], lon: [[lon]]}}, [hlIdx]);
 
-                // Tooltip via loneHover on the map subplot's SVG hover layer
+                // Tooltip via loneHover on the subplot's SVG hover layer.
                 try {{
-                    var mapGL = getMapGL(plotDiv);
-                    if (mapGL && mapGL.project) {{
-                        var px     = mapGL.project([lon, lat]);
-                        var mapKey = getMapKey(plotDiv, trace);
-                        var hoverLayer = plotDiv._fullLayout[mapKey] &&
-                                         plotDiv._fullLayout[mapKey]._hoverlayer;
-                        if (hoverLayer && Plotly.Fx.loneHover) {{
+                    var px  = null;
+                    var geo = getGeoSubplot(plotDiv, trace);
+                    if (geo) {{
+                        // d3-geo returns null for points clipped by the projection.
+                        var p = geo._subplot.projection([lon, lat]);
+                        if (p) px = {{x: p[0], y: p[1]}};
+                    }} else {{
+                        var mapGL = getMapGL(plotDiv);
+                        if (mapGL && mapGL.project) px = mapGL.project([lon, lat]);
+                    }}
+                    if (px) {{
+                        var container = getHoverContainer(plotDiv, trace);
+                        if (container && Plotly.Fx.loneHover) {{
                             Plotly.Fx.loneHover({{
                                 trace: trace,
                                 x: px.x, y: px.y,
@@ -194,26 +241,32 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                                 fontColor: '#333',
                                 idealAlign: px.x < plotDiv.clientWidth / 2 ? 'right' : 'left'
                             }}, {{
-                                container: hoverLayer.node(),
+                                container: container,
                                 gd: plotDiv
                             }});
-                        }} else {{
-                            // fallback: Fx.hover with screen coords
-                            var canvas = mapGL.getCanvas();
+                        }} else if (!geo) {{
+                            // fallback: Fx.hover with screen coords (GL maps only)
+                            var canvas = getMapGL(plotDiv).getCanvas();
                             var rect   = canvas.getBoundingClientRect();
                             window._hoverSyncSkip = plotId;
                             Plotly.Fx.hover(plotDiv,
                                 {{clientX: rect.left + px.x, clientY: rect.top + px.y}},
-                                mapKey);
+                                getMapKey(plotDiv, trace));
                         }}
                     }}
                 }} catch(e) {{}}
 
             // ── SCATTER / SCATTERGL ──────────────────────────────────────────
             }} else {{
-                var x = (trace.x && foundPoint < trace.x.length) ? trace.x[foundPoint] : null;
-                var y = (trace.y && foundPoint < trace.y.length) ? trace.y[foundPoint] : null;
-                var z = (trace.z && foundPoint < trace.z.length) ? trace.z[foundPoint] : null;
+                var x = coordAt(trace.x, foundPoint);
+                var y = coordAt(trace.y, foundPoint);
+                var z = coordAt(trace.z, foundPoint);
+                if (x == null && plotDiv._fullData && plotDiv._fullData[foundTrace]) {{
+                    var fdc = plotDiv._fullData[foundTrace];
+                    x = coordAt(fdc.x, foundPoint);
+                    if (y == null) y = coordAt(fdc.y, foundPoint);
+                    if (z == null) z = coordAt(fdc.z, foundPoint);
+                }}
 
                 // Reposition visual ring
                 if (x != null) {{

@@ -57,6 +57,25 @@ def auto_detect_dimensions(columns, id_col):
     return best_cols
 
 
+def detect_eigenvec_sep(filepath):
+    """
+    Pick the field separator for an eigenvec file.
+
+    Plain PLINK eigenvec files are whitespace-separated with single-token
+    values, so splitting on any run of whitespace (``\\s+``) works whether the
+    file itself uses spaces or tabs. But a "single file" that also carries
+    embedded annotation columns (the interactive-pca single-file mode) commonly
+    has multi-word column names or values (e.g. "Archeological Culture",
+    "Greece - BronzeAge") — splitting those on generic whitespace shreds a
+    field into several, misaligning every column after it. If the file
+    actually uses tabs as its delimiter, splitting on tabs only avoids that,
+    since spaces inside a field are then never mistaken for a delimiter.
+    """
+    with open(filepath, 'r') as f:
+        first_line = f.readline()
+    return '\t' if '\t' in first_line else r"\s+"
+
+
 def load_eigenvec(filepath, id_column=None, dim=None):
     """
     Load eigenvec file (eigenvectors and optionally annotation data in a single file).
@@ -71,7 +90,7 @@ def load_eigenvec(filepath, id_column=None, dim=None):
         Tuple of (eigenvec_df, pc_list, id_column_name)
     """
     logging.info(f"Reading eigenvec file '{filepath}' ...")
-    eigenvec = pd.read_csv(filepath, sep=r"\s+", header=0)
+    eigenvec = pd.read_csv(filepath, sep=detect_eigenvec_sep(filepath), header=0)
 
     # Determine ID column
     eigenvec_id = id_column if id_column is not None else eigenvec.columns[0]
@@ -108,6 +127,65 @@ def load_eigenvec(filepath, id_column=None, dim=None):
 
     logging.info(f"Reading eigenvec file '{filepath}' ... done.")
     return eigenvec, pcs, "id"
+
+
+def resolve_annotation_columns(annotation_desc, args, default_id=None):
+    """
+    Resolve the id/time/latitude/longitude working column names (abbreviations)
+    from the user-supplied (possibly full) names in ``args``, via
+    ``annotation_desc`` — the Description<->Abbreviation lookup table.
+
+    Args:
+        annotation_desc: DataFrame with 'Description' and 'Abbreviation' columns
+        args: Arguments namespace with annotationID/time/longitude/latitude
+        default_id: Abbreviation to fall back to for the id column when
+                    annotationID is unset or not found (defaults to the first
+                    abbreviation in annotation_desc)
+
+    Returns:
+        Dict with resolved keys among 'id', 'time', 'longitude', 'latitude'
+    """
+    descriptions = annotation_desc['Description'].to_list()
+    abbreviations = annotation_desc['Abbreviation'].to_list()
+    columns = set(abbreviations)
+    annotation_columns = {}
+
+    # ID column
+    fallback_id = default_id if default_id is not None else abbreviations[0]
+    if args.annotationID is not None:
+        annotation_id = get_abbr_of(args.annotationID, descriptions, abbreviations)
+        if annotation_id is None or annotation_id not in columns:
+            logging.info(f"Warning: Specified annotationID '{args.annotationID}' not found. Using first column.")
+            annotation_id = fallback_id
+    else:
+        annotation_id = fallback_id
+    annotation_columns['id'] = annotation_id
+
+    # Time column
+    if args.time is not None:
+        annotation_time = get_abbr_of(args.time, descriptions, abbreviations)
+        if annotation_time and annotation_time in columns:
+            annotation_columns['time'] = annotation_time
+        else:
+            logging.warning(f"Warning: Specified time '{args.time}' not found. Time graph disabled.")
+
+    # Longitude column
+    if args.longitude is not None:
+        annotation_long = get_abbr_of(args.longitude, descriptions, abbreviations)
+        if annotation_long and annotation_long in columns:
+            annotation_columns['longitude'] = annotation_long
+        else:
+            logging.warning(f"Warning: Specified longitude '{args.longitude}' not found. Map disabled.")
+
+    # Latitude column
+    if args.latitude is not None:
+        annotation_lat = get_abbr_of(args.latitude, descriptions, abbreviations)
+        if annotation_lat and annotation_lat in columns:
+            annotation_columns['latitude'] = annotation_lat
+        else:
+            logging.warning(f"Warning: Specified latitude '{args.latitude}' not found. Map disabled.")
+
+    return annotation_columns
 
 
 def load_annotation(filepath, args=None):
@@ -168,50 +246,9 @@ def load_annotation(filepath, args=None):
     annotation.columns = annotation_desc['Abbreviation']
     
     # Get annotation column names
-    annotation_columns = {}
-    
-    # ID column
-    if args.annotationID is not None:
-        annotation_id = get_abbr_of(args.annotationID, 
-                                   annotation_desc['Description'].to_list(), 
-                                   annotation_desc['Abbreviation'].to_list())
-        if annotation_id is None or annotation_id not in annotation.columns:
-            logging.info(f"Warning: Specified annotationID '{args.annotationID}' not found. Using first column.")
-            annotation_id = annotation.columns[0]
-    else:
-        annotation_id = annotation.columns[0]
-    
-    annotation_columns['id'] = annotation_id
-    
-    # Time column
-    if args.time is not None:
-        annotation_time = get_abbr_of(args.time, 
-                                     annotation_desc['Description'].to_list(), 
-                                     annotation_desc['Abbreviation'].to_list())
-        if annotation_time and annotation_time in annotation.columns:
-            annotation_columns['time'] = annotation_time
-        else:
-            logging.warning(f"Warning: Specified time '{args.time}' not found. Time graph disabled.")
-    
-    # Longitude column
-    if args.longitude is not None:
-        annotation_long = get_abbr_of(args.longitude, 
-                                     annotation_desc['Description'].to_list(), 
-                                     annotation_desc['Abbreviation'].to_list())
-        if annotation_long and annotation_long in annotation.columns:
-            annotation_columns['longitude'] = annotation_long
-        else:
-            logging.warning(f"Warning: Specified longitude '{args.longitude}' not found. Map disabled.")
-    
-    # Latitude column
-    if args.latitude is not None:
-        annotation_lat = get_abbr_of(args.latitude, 
-                                    annotation_desc['Description'].to_list(), 
-                                    annotation_desc['Abbreviation'].to_list())
-        if annotation_lat and annotation_lat in annotation.columns:
-            annotation_columns['latitude'] = annotation_lat
-        else:
-            logging.warning(f"Warning: Specified latitude '{args.latitude}' not found. Map disabled.")
+    annotation_columns = resolve_annotation_columns(
+        annotation_desc, args, default_id=annotation.columns[0]
+    )
     
     # Clean categorical columns if needed
     exclude_abbr = [v for k, v in annotation_columns.items() if k != 'id']
@@ -272,13 +309,12 @@ def merge_data(eigenvec, annotation, eigenvec_id_col='id', annotation_id_col=Non
             right_on=annotation_id_col,
             how="left"
         )
-        
-        if invert_time and time_col is not None and time_col in df.columns:
-            df[time_col] = -df[time_col]
-
     else:
         df = eigenvec.copy()
-    
+
+    if invert_time and time_col is not None and time_col in df.columns:
+        df[time_col] = -df[time_col]
+
     # Ensure 'id' column is first
     if df.columns[0] != 'id':
         df = df[['id'] + [c for c in df.columns if c != 'id']]

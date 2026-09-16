@@ -17,10 +17,23 @@ import pandas as pd
 from dash import Input, Output, State, ALL, ctx, html, no_update
 
 from ..args import create_parser
+from ..data_loader import auto_detect_dimensions, detect_eigenvec_sep, find_incrementing_prefix_series
 from ..relaunch import schedule_relaunch, POLLER_JS
 from ..layouts.setup import (
-    ANNOTATION_DEPENDENT, EIGENVEC_FIELDS, ANNOTATION_FIELDS, settings_arg_names,
+    ANNOTATION_DEPENDENT, EIGENVEC_FIELDS, ANNOTATION_FIELDS,
+    settings_arg_names, all_arg_names,
 )
+
+
+# The loader panels' fields live under 'setup-arg'; the Settings tab mirrors
+# every parameter under 'settings-arg'. A Load button takes its own panel's
+# fields from the former and the remaining options from the latter.
+_SETTINGS_STATE = (State({'type': 'settings-arg', 'name': ALL}, 'value'),
+                   State({'type': 'settings-arg', 'name': ALL}, 'id'))
+
+
+def _dom(values, ids):
+    return {i['name']: v for i, v in zip(ids, values)}
 
 
 # ── Small helpers ────────────────────────────────────────────────────────────
@@ -112,6 +125,13 @@ def _relaunch_from(args, dom_values, overlay_names):
     if isinstance(selected, list):
         merged['selectedID'] = ';'.join(map(str, selected)) if selected else None
 
+    # Load/Apply always move forward out of the loader shell. Only the
+    # header's Restart button (app.py:_restart) composes --setup deliberately;
+    # without this, a process already running with --setup (e.g. after a
+    # Restart) would carry it into every subsequent relaunch here and the app
+    # would bounce straight back to the loader after every Load/Apply.
+    merged['setup'] = False
+
     port = merged.get('server_port') or getattr(args, 'server_port', 8050)
     try:
         port = int(port)
@@ -130,7 +150,8 @@ def _starting_alert():
     )
 
 
-def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_loader):
+def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_loader,
+                            show_embedded_annotation_button=False):
     """Register the loader/settings callbacks that are relevant for this state."""
     show_browse = show_eigenvec_loader or show_annotation_loader
 
@@ -203,6 +224,7 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             Output({'type': 'setup-arg', 'name': 'eigenvecID'}, 'value'),
             Output({'type': 'setup-arg', 'name': 'dim'}, 'value'),
             Output('eigenvec-read-status', 'children'),
+            Output('eigenvec-details', 'style'),
             Input('read-eigenvec-btn', 'n_clicks'),
             State({'type': 'setup-arg', 'name': 'eigenvec'}, 'value'),
             prevent_initial_call=True,
@@ -213,17 +235,17 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
 
             if not path or not str(path).strip():
                 return no_update, no_update, no_update, dbc.Alert(
-                    'Enter the eigenvec file path.', color='warning')
+                    'Enter the eigenvec file path.', color='warning'), no_update
             if not os.path.isfile(path):
                 return no_update, no_update, no_update, dbc.Alert(
-                    f"File not found: {path}", color='danger')
+                    f"File not found: {path}", color='danger'), no_update
             try:
-                df = pd.read_csv(path, sep=r"\s+", nrows=None)
+                df = pd.read_csv(path, sep=detect_eigenvec_sep(path), nrows=None)
                 cols = list(df.columns)
                 n_samples = len(df)
             except Exception as exc:  # noqa: BLE001
                 return no_update, no_update, no_update, dbc.Alert(
-                    f"Could not read: {exc}", color='danger')
+                    f"Could not read: {exc}", color='danger'), no_update
 
             # Auto-detect dimensions from all columns (don't exclude any initially)
             # Find all columns matching PREFIX+number pattern
@@ -276,10 +298,14 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             # Build status message
             status_parts = [f"Read {len(cols)} columns, {n_samples} samples."]
             status_parts.append(f"Guessed {len(guessed_dims)} dimensions, {n_annotations} annotations.")
+            if n_annotations > 0:
+                status_parts.append("Loading here gives you coordinates only — use the "
+                                    "Annotation tab afterwards to load these as annotation.")
             status_msg = ' '.join(status_parts)
 
             options = [{'label': c, 'value': c} for c in cols]
-            return options, id_col, dim_value, dbc.Alert(status_msg, color='success')
+            return (options, id_col, dim_value,
+                    dbc.Alert(status_msg, color='success'), {})
 
         @app.callback(
             Output({'type': 'setup-arg', 'name': 'selectedID'}, 'options'),
@@ -291,7 +317,7 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             if not id_col or not path or not os.path.isfile(path):
                 return no_update
             try:
-                values = pd.read_csv(path, sep=r"\s+", usecols=[id_col])[id_col]
+                values = pd.read_csv(path, sep=detect_eigenvec_sep(path), usecols=[id_col])[id_col]
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Could not read sample IDs: %s", exc)
                 return no_update
@@ -308,25 +334,34 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             Input('pca-load-btn', 'n_clicks'),
             State({'type': 'setup-arg', 'name': ALL}, 'value'),
             State({'type': 'setup-arg', 'name': ALL}, 'id'),
+            *_SETTINGS_STATE,
             prevent_initial_call=True,
         )
-        def pca_load(_n, values, ids):
-            dom = {i['name']: v for i, v in zip(ids, values)}
+        def pca_load(_n, values, ids, set_values, set_ids):
+            dom = {**_dom(set_values, set_ids), **_dom(values, ids)}
             eigenvec = dom.get('eigenvec')
             if not eigenvec or not str(eigenvec).strip():
                 return no_update, dbc.Alert('The eigenvec file is required.', color='danger')
             if not os.path.isfile(eigenvec):
                 return no_update, dbc.Alert(f"Eigenvec file not found: {eigenvec}",
                                             color='danger')
-            port = _relaunch_from(args, dom, EIGENVEC_FIELDS + settings_arg_names())
+            # Coordinates only — any extra columns in the file are left for the
+            # Annotation tab to load explicitly (with lat/long/time chosen there).
+            dom['ignore_embedded_annotation'] = True
+            overlay = EIGENVEC_FIELDS + settings_arg_names() + ['ignore_embedded_annotation']
+            port = _relaunch_from(args, dom, overlay)
             return {'go': True, 'port': port}, _starting_alert()
 
     # ── Annotation loader (Annotation tab) ───────────────────────────────────
     if show_annotation_loader:
         @app.callback(
-            [Output({'type': 'setup-arg', 'name': c}, 'options') for c in ANNOTATION_DEPENDENT]
-            + [Output({'type': 'setup-arg', 'name': c}, 'value') for c in ANNOTATION_DEPENDENT]
-            + [Output('annotation-read-status', 'children')],
+            [Output({'type': 'setup-arg', 'name': c}, 'options', allow_duplicate=True)
+             for c in ANNOTATION_DEPENDENT]
+            + [Output({'type': 'setup-arg', 'name': c}, 'value', allow_duplicate=True)
+               for c in ANNOTATION_DEPENDENT]
+            + [Output('annotation-read-status', 'children'),
+               Output('annotation-details', 'style', allow_duplicate=True),
+               Output('annotation-source-store', 'data', allow_duplicate=True)],
             Input('read-annotation-btn', 'n_clicks'),
             State({'type': 'setup-arg', 'name': 'annotation'}, 'value'),
             [State({'type': 'setup-arg', 'name': c}, 'value') for c in ANNOTATION_DEPENDENT],
@@ -336,17 +371,17 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             n = len(ANNOTATION_DEPENDENT)
             if not path or not str(path).strip():
                 msg = dbc.Alert('Enter the annotation file path.', color='warning')
-                return [no_update] * (2 * n) + [msg]
+                return [no_update] * (2 * n) + [msg, no_update, no_update]
             if not os.path.isfile(path):
                 msg = dbc.Alert(f"File not found: {path}", color='danger')
-                return [no_update] * (2 * n) + [msg]
+                return [no_update] * (2 * n) + [msg, no_update, no_update]
             try:
                 df = pd.read_csv(path, sep='\t', nrows=None)
                 cols = list(df.columns)
                 n_samples = len(df)
             except Exception as exc:  # noqa: BLE001
                 msg = dbc.Alert(f"Could not read: {exc}", color='danger')
-                return [no_update] * (2 * n) + [msg]
+                return [no_update] * (2 * n) + [msg, no_update, no_update]
             options = [{'label': c, 'value': c} for c in cols]
             guesses = {
                 'annotationID': _guess(cols, 'genetic id', 'id', 'sample', 'iid'),
@@ -358,7 +393,92 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             values = [cur if cur in cols else guesses.get(dest)
                       for dest, cur in zip(ANNOTATION_DEPENDENT, current)]
             msg = dbc.Alert(f"Read {len(cols)} columns, {n_samples} samples.", color='success')
-            return [options] * n + values + [msg]
+            return [options] * n + values + [msg, {}, 'file']
+
+        # The "Use annotations from eigenvec file" button/callback only make
+        # sense — and only exist in the DOM — when there's something for them to
+        # offer (annotation_loader_panel renders them conditionally too).
+        if show_embedded_annotation_button:
+            def _detect_embedded_columns(eigenvec_path, dim_value, id_value):
+                """Columns in the eigenvec file that aren't the ID or dimension columns."""
+                df = pd.read_csv(eigenvec_path, sep=detect_eigenvec_sep(eigenvec_path), nrows=None)
+                cols = list(df.columns)
+                id_col = id_value if id_value in cols else cols[0]
+                if dim_value and str(dim_value).strip():
+                    dims = [c.strip() for c in str(dim_value).split(',') if c.strip()]
+                else:
+                    dims = auto_detect_dimensions(cols, id_col) or \
+                        find_incrementing_prefix_series(cols)
+                dim_set = set(dims)
+                return [c for c in cols if c != id_col and c not in dim_set]
+
+            # The eigenvec path/dim/ID fields only exist in the DOM while the PCA
+            # tab still shows its loader (show_eigenvec_loader). Once the PCA
+            # tab's own Load has already happened (the normal path here — it
+            # loads coordinates only, see pca_load), those fields are gone and
+            # the same info is read straight from `args` instead.
+            _embedded_eigenvec_states = (
+                [State({'type': 'setup-arg', 'name': 'eigenvec'}, 'value'),
+                 State({'type': 'setup-arg', 'name': 'dim'}, 'value'),
+                 State({'type': 'setup-arg', 'name': 'eigenvecID'}, 'value')]
+                if show_eigenvec_loader else []
+            )
+
+            @app.callback(
+                [Output({'type': 'setup-arg', 'name': c}, 'options', allow_duplicate=True)
+                 for c in ANNOTATION_DEPENDENT]
+                + [Output({'type': 'setup-arg', 'name': c}, 'value', allow_duplicate=True)
+                   for c in ANNOTATION_DEPENDENT]
+                + [Output('embedded-annotation-status', 'children'),
+                   Output('annotation-details', 'style', allow_duplicate=True),
+                   Output('annotation-source-store', 'data', allow_duplicate=True),
+                   Output({'type': 'setup-arg', 'name': 'annotation'}, 'value',
+                           allow_duplicate=True)],
+                Input('use-embedded-annotation-btn', 'n_clicks'),
+                *_embedded_eigenvec_states,
+                [State({'type': 'setup-arg', 'name': c}, 'value') for c in ANNOTATION_DEPENDENT],
+                prevent_initial_call=True,
+            )
+            def use_embedded_annotation(_n, *rest):
+                n = len(ANNOTATION_DEPENDENT)
+                if show_eigenvec_loader:
+                    eigenvec_path, dim_value, id_value = rest[0], rest[1], rest[2]
+                    current = rest[3:]
+                else:
+                    eigenvec_path = getattr(args, 'eigenvec', None)
+                    dim_value = getattr(args, 'dim', None)
+                    id_value = getattr(args, 'eigenvecID', None)
+                    current = rest
+                no_change = [no_update] * (2 * n)
+                if not eigenvec_path or not str(eigenvec_path).strip():
+                    msg = dbc.Alert('Enter the eigenvec file path first (PCA tab).', color='warning')
+                    return no_change + [msg, no_update, no_update, no_update]
+                if not os.path.isfile(eigenvec_path):
+                    msg = dbc.Alert(f"Eigenvec file not found: {eigenvec_path}", color='danger')
+                    return no_change + [msg, no_update, no_update, no_update]
+                try:
+                    cols = _detect_embedded_columns(eigenvec_path, dim_value, id_value)
+                except Exception as exc:  # noqa: BLE001
+                    msg = dbc.Alert(f"Could not read: {exc}", color='danger')
+                    return no_change + [msg, no_update, no_update, no_update]
+                if not cols:
+                    msg = dbc.Alert('No extra (non-dimension) columns found in the eigenvec file — '
+                                    'read a separate annotation file below.', color='warning')
+                    return no_change + [msg, no_update, no_update, no_update]
+                options = [{'label': c, 'value': c} for c in cols]
+                guesses = {
+                    'annotationID': _guess(cols, 'genetic id', 'id', 'sample', 'iid'),
+                    'latitude': _guess(cols, 'lat', 'latitude'),
+                    'longitude': _guess(cols, 'long', 'lon', 'longitude'),
+                    'time': _guess(cols, 'date', 'time', 'age', 'year'),
+                    'group': _guess(cols, 'group', 'region', 'population', 'pop'),
+                }
+                values = [cur if cur in cols else guesses.get(dest)
+                          for dest, cur in zip(ANNOTATION_DEPENDENT, current)]
+                msg = dbc.Alert(f"Using {len(cols)} embedded annotation columns: "
+                                f"{', '.join(cols[:6])}{', …' if len(cols) > 6 else ''}.",
+                                color='success')
+                return [options] * n + values + [msg, {}, 'embedded', '']
 
         @app.callback(
             Output('relaunch-store', 'data', allow_duplicate=True),
@@ -366,14 +486,28 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             Input('annotation-load-btn', 'n_clicks'),
             State({'type': 'setup-arg', 'name': ALL}, 'value'),
             State({'type': 'setup-arg', 'name': ALL}, 'id'),
+            State('annotation-source-store', 'data'),
+            *_SETTINGS_STATE,
             prevent_initial_call=True,
         )
-        def annotation_load(_n, values, ids):
-            dom = {i['name']: v for i, v in zip(ids, values)}
+        def annotation_load(_n, values, ids, source, set_values, set_ids):
+            dom = {**_dom(set_values, set_ids), **_dom(values, ids)}
             # Eigenvec must already be loaded (this loader lives in the running app).
             if not getattr(args, 'eigenvec', None):
                 return no_update, dbc.Alert('Load the eigenvec first (PCA tab).',
                                             color='warning')
+            if source == 'embedded':
+                # Annotation columns live inside the eigenvec file itself. The PCA
+                # tab's earlier Load set --ignore-embedded-annotation to get
+                # coordinates only; clear it here so this relaunch actually
+                # extracts them, omit --annotation so they come from the
+                # eigenvec, and carry over the eigenvec fields too in case this
+                # is somehow the first relaunch (before the PCA tab's own Load).
+                dom['ignore_embedded_annotation'] = False
+                overlay = (EIGENVEC_FIELDS + ANNOTATION_DEPENDENT + settings_arg_names()
+                          + ['ignore_embedded_annotation'])
+                port = _relaunch_from(args, dom, overlay)
+                return {'go': True, 'port': port}, _starting_alert()
             annotation = dom.get('annotation')
             if not annotation or not str(annotation).strip():
                 return no_update, dbc.Alert('The annotation file is required.',
@@ -389,13 +523,13 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
         Output('relaunch-store', 'data', allow_duplicate=True),
         Output('settings-status', 'children'),
         Input('settings-apply-btn', 'n_clicks'),
-        State({'type': 'setup-arg', 'name': ALL}, 'value'),
-        State({'type': 'setup-arg', 'name': ALL}, 'id'),
+        *_SETTINGS_STATE,
         prevent_initial_call=True,
     )
     def settings_apply(_n, values, ids):
-        dom = {i['name']: v for i, v in zip(ids, values)}
-        port = _relaunch_from(args, dom, settings_arg_names())
+        # Settings owns every parameter, so Refresh relaunches with exactly what
+        # the tab shows — a field cleared here is dropped from the command line.
+        port = _relaunch_from(args, _dom(values, ids), all_arg_names())
         return {'go': True, 'port': port}, _starting_alert()
 
     # ── Reload poller (always) ───────────────────────────────────────────────

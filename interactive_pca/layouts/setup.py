@@ -26,23 +26,34 @@ ANNOTATION_DEPENDENT = ['annotationID', 'latitude', 'longitude', 'time', 'group'
 ANNOTATION_FIELDS = ['annotation'] + ANNOTATION_DEPENDENT
 PRIMARY_ARGS = EIGENVEC_FIELDS + ANNOTATION_FIELDS
 # Internal flags not shown as form fields.
-_INTERNAL_ARGS = ['setup']
+_INTERNAL_ARGS = ['setup', 'ignore_embedded_annotation']
 
 
 def settings_arg_names():
-    """CLI dests that belong to the Settings tab (everything not a file/column)."""
+    """CLI dests that are *only* in the Settings tab (not a file/column field)."""
     return [a.dest for a in create_parser()._actions
             if a.option_strings and a.dest not in ('help',)
             and a.dest not in PRIMARY_ARGS and a.dest not in _INTERNAL_ARGS]
+
+
+def all_arg_names():
+    """Every CLI dest the Settings tab shows (the file/column fields included)."""
+    return [a.dest for a in create_parser()._actions
+            if a.option_strings and a.dest not in ('help',)
+            and a.dest not in _INTERNAL_ARGS]
 
 
 def _actions_by_dest():
     return {a.dest: a for a in create_parser()._actions if a.option_strings}
 
 
-def _arg(name):
-    """Pattern-matching id so one callback can collect every field via ALL."""
-    return {'type': 'setup-arg', 'name': name}
+def _arg(name, id_type='setup-arg'):
+    """Pattern-matching id so one callback can collect every field via ALL.
+
+    The loader panels use ``setup-arg``; the Settings tab mirrors *every*
+    parameter under ``settings-arg`` so the two can coexist without colliding.
+    """
+    return {'type': id_type, 'name': name}
 
 
 def _initial(args, dest, fallback=None):
@@ -51,10 +62,10 @@ def _initial(args, dest, fallback=None):
     return val if val is not None else fallback
 
 
-def _field_component(action, args):
+def _field_component(action, args, id_type='setup-arg'):
     """Build the input component for one argparse action, prefilled from args."""
     dest = action.dest
-    comp_id = _arg(dest)
+    comp_id = _arg(dest, id_type)
     default = _initial(args, dest, action.default)
 
     if isinstance(action, argparse._StoreTrueAction) or action.nargs == 0:
@@ -98,6 +109,15 @@ def _file_row(label, args, action, browse_id, help_text):
     )
 
 
+def _details_style(args, file_dest):
+    """Hide a loader's second step until Read succeeds.
+
+    A path already prefilled (e.g. after Restart) means its columns are known,
+    so the step starts open in that case.
+    """
+    return {} if _initial(args, file_dest) else {'display': 'none'}
+
+
 def _dependent_dropdown(args, dest, label, help_text):
     """A file-dependent dropdown, options filled after 'Read'."""
     value = _initial(args, dest)
@@ -136,68 +156,119 @@ def eigenvec_loader_panel(args):
             html.Div(dbc.Button('Read', id='read-eigenvec-btn', color='secondary',
                                 n_clicks=0), className='my-2'),
             html.Div(id='eigenvec-read-status', className='mb-2'),
-            _labeled_row('Dimension columns', _field_component(by['dim'], args),
-                         'Comma-separated (e.g., PC1,PC2,PC3). Auto-detects if left empty.'),
-            _labeled_row('Eigenvec ID column', eigenvec_id_dd,
-                         'Defaults to the first column.'),
-            _labeled_row('Selected IDs', selected_dd,
-                         'Which samples start selected (leave empty for all).'),
-            html.Div(dbc.Button('Load', id='pca-load-btn', color='primary',
-                                size='lg', n_clicks=0), className='mt-3'),
-            html.Div(id='pca-load-status', className='mt-2'),
+            # Second step: revealed by Read (see callbacks/setup.py:read_eigenvec).
+            html.Div(
+                [
+                    html.Hr(),
+                    _labeled_row('Dimension columns', _field_component(by['dim'], args),
+                                 'Comma-separated (e.g., PC1,PC2,PC3). '
+                                 'Auto-detects if left empty.'),
+                    _labeled_row('Eigenvec ID column', eigenvec_id_dd,
+                                 'Defaults to the first column.'),
+                    _labeled_row('Selected IDs', selected_dd,
+                                 'Which samples start selected (leave empty for all).'),
+                    html.Div(dbc.Button('Load', id='pca-load-btn', color='primary',
+                                        size='lg', n_clicks=0), className='mt-3'),
+                    html.Div(id='pca-load-status', className='mt-2'),
+                ],
+                id='eigenvec-details',
+                style=_details_style(args, 'eigenvec'),
+            ),
         ],
         style={'maxWidth': '760px'},
     )
 
 
-def annotation_loader_panel(args):
+def annotation_loader_panel(args, has_embedded_annotation_cols=False):
     """Annotation-tab content when no annotation is loaded: the annotation loader."""
     by = _actions_by_dest()
+    embedded_option = [
+        html.Div(
+            [
+                dbc.Button('Use annotations from eigenvec file',
+                           id='use-embedded-annotation-btn', color='secondary',
+                           n_clicks=0),
+                html.Span('  Use the extra (non-dimension) columns already in the '
+                          'eigenvec file instead of a separate file.',
+                          className='text-muted small ms-2'),
+            ],
+            className='mb-2',
+        ),
+        html.Div(id='embedded-annotation-status', className='mb-3'),
+        html.Hr(),
+        html.P('— or read a separate annotation file —', className='text-muted mb-2'),
+    ] if has_embedded_annotation_cols else []
     return dbc.Container(
         [
             html.H4('Load annotation data', className='mt-3'),
             html.P('Optional metadata (regions, coordinates, dates, …). '
                    'Load the eigenvec first (PCA tab).', className='text-muted'),
+            dcc.Store(id='annotation-source-store', data='file'),
+            *embedded_option,
             _file_row('Annotation file', args, by['annotation'], 'browse-annotation',
                       'Type a server-side path, or Browse.'),
             html.Div(dbc.Button('Read', id='read-annotation-btn', color='secondary',
                                 n_clicks=0), className='my-2'),
             html.Div(id='annotation-read-status', className='mb-2'),
-            _dependent_dropdown(args, 'annotationID', 'Annotation ID column',
-                                'Column matching the eigenvec IDs.'),
-            _dependent_dropdown(args, 'latitude', 'Latitude column',
-                                'Enables the map when latitude + longitude are set.'),
-            _dependent_dropdown(args, 'longitude', 'Longitude column', None),
-            _dependent_dropdown(args, 'time', 'Time column', 'Enables the time plot.'),
-            _dependent_dropdown(args, 'group', 'Group / colour column',
-                                'Default grouping for colour.'),
-            _dependent_dropdown(args, 'group_shape', 'Group / shape column',
-                                'Default grouping for marker shape (categorical).'),
-            html.Div(dbc.Button('Load', id='annotation-load-btn', color='primary',
-                                size='lg', n_clicks=0), className='mt-3'),
-            html.Div(id='annotation-load-status', className='mt-2'),
+            # Second step: revealed by Read (see callbacks/setup.py:read_annotation).
+            html.Div(
+                [
+                    html.Hr(),
+                    _dependent_dropdown(args, 'annotationID', 'Annotation ID column',
+                                        'Column matching the eigenvec IDs.'),
+                    _dependent_dropdown(args, 'latitude', 'Latitude column',
+                                        'Enables the map when latitude + longitude are set.'),
+                    _dependent_dropdown(args, 'longitude', 'Longitude column', None),
+                    _dependent_dropdown(args, 'time', 'Time column',
+                                        'Enables the time plot.'),
+                    _dependent_dropdown(args, 'group', 'Group / colour column',
+                                        'Default grouping for colour.'),
+                    _dependent_dropdown(args, 'group_shape', 'Group / shape column',
+                                        'Default grouping for marker shape (categorical).'),
+                    html.Div(dbc.Button('Load', id='annotation-load-btn', color='primary',
+                                        size='lg', n_clicks=0), className='mt-3'),
+                    html.Div(id='annotation-load-status', className='mt-2'),
+                ],
+                id='annotation-details',
+                style=_details_style(args, 'annotation'),
+            ),
         ],
         style={'maxWidth': '760px'},
     )
 
 
 def settings_panel(args):
-    """Settings-tab content: all the other CLI options + an Apply (relaunch) button."""
-    actions = [a for a in create_parser()._actions
-               if a.option_strings and a.dest not in ('help',)
-               and a.dest not in PRIMARY_ARGS and a.dest not in _INTERNAL_ARGS]
-    # Strip leading '--' from CLI option names for cleaner display
-    rows = [_labeled_row(a.option_strings[0].lstrip('-'), _field_component(a, args), a.help)
-            for a in actions]
+    """Settings-tab content: *every* CLI option + a Refresh (relaunch) button.
+
+    Unlike the loader panels — which only exist while their file is missing —
+    this lists the file/column parameters too, and it is always present. That
+    makes it the one place to change e.g. --latitude/--longitude/--time on an
+    app whose data is already loaded.
+    """
+    by = _actions_by_dest()
+
+    def rows(dests):
+        # Strip leading '--' from CLI option names for cleaner display.
+        return [_labeled_row(by[d].option_strings[0].lstrip('-'),
+                             _field_component(by[d], args, 'settings-arg'), by[d].help)
+                for d in dests if d in by]
+
+    other = [d for d in all_arg_names() if d not in PRIMARY_ARGS]
     return html.Div(
         [
             html.Div(
                 [
                     html.H4('Settings', className='mt-3'),
-                    html.P('Applied on the next Load, or click Apply to relaunch now.',
+                    html.P('Every parameter, including those set while loading. '
+                           'Click Refresh to relaunch with the current values.',
                            className='text-muted'),
-                    *rows,
-                    html.Div(dbc.Button('Apply', id='settings-apply-btn', color='primary',
+                    html.H6('Eigenvec', className='mt-3 text-muted'),
+                    *rows(EIGENVEC_FIELDS),
+                    html.H6('Annotation', className='mt-4 text-muted'),
+                    *rows(ANNOTATION_FIELDS),
+                    html.H6('Other options', className='mt-4 text-muted'),
+                    *rows(other),
+                    html.Div(dbc.Button('Refresh', id='settings-apply-btn', color='primary',
                                         n_clicks=0), className='mt-3'),
                     html.Div(id='settings-status', className='mt-2'),
                 ],
