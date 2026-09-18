@@ -106,7 +106,10 @@ def create_layout(args, df, pcs,
         'value': 'annotation_tab',
         'content': create_annotation_tab(annotation_desc, annotation_columns, pcs)
                    if annotation_desc is not None
-                   else annotation_loader_panel(args, has_embedded_annotation_cols)
+                   else annotation_loader_panel(
+                       args, show_embedded_option=(has_embedded_annotation_cols or df is None),
+                       has_embedded_annotation_cols=has_embedded_annotation_cols,
+                   )
     })
 
     # Settings tab (always present): the other CLI options.

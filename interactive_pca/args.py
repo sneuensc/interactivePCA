@@ -60,6 +60,12 @@ def create_parser(script_name='Script'):
     # clears it again on its own relaunch.
     parser.add_argument('--ignore-embedded-annotation', action='store_true',
                        default=False, help=argparse.SUPPRESS)
+    parser.add_argument('--merge-embedded-annotation', action='store_true', default=False,
+                       help='When --eigenvec has its own extra (non-ID, non-dimension) columns '
+                            'and --annotation is also given, combine both as annotation instead '
+                            'of using only the annotation file. A column already present in the '
+                            'annotation file takes precedence over one of the same name embedded '
+                            'in --eigenvec.')
     parser.add_argument('--annotationID', type=str, default='Genetic ID', metavar="NAME",
                        help='Annotation ID column (default first column)')
     parser.add_argument('--longitude', type=str, default=None, metavar="NAME",

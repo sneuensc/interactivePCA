@@ -23,7 +23,7 @@ from ..args import create_parser, float_0_1
 # Field groupings by CLI dest.
 EIGENVEC_FIELDS = ['eigenvec', 'dim', 'eigenvecID', 'selectedID']
 ANNOTATION_DEPENDENT = ['annotationID', 'latitude', 'longitude', 'time', 'group', 'group_shape']
-ANNOTATION_FIELDS = ['annotation'] + ANNOTATION_DEPENDENT
+ANNOTATION_FIELDS = ['annotation', 'merge_embedded_annotation'] + ANNOTATION_DEPENDENT
 PRIMARY_ARGS = EIGENVEC_FIELDS + ANNOTATION_FIELDS
 # Internal flags not shown as form fields.
 _INTERNAL_ARGS = ['setup', 'ignore_embedded_annotation']
@@ -123,7 +123,7 @@ def _dependent_dropdown(args, dest, label, help_text):
     value = _initial(args, dest)
     options = [{'label': value, 'value': value}] if value else []
     comp = dcc.Dropdown(id=_arg(dest), options=options, value=value,
-                        clearable=True, placeholder='(read the file first)')
+                        clearable=True, placeholder='(not set)')
     return _labeled_row(label, comp, help_text)
 
 
@@ -134,7 +134,7 @@ def eigenvec_loader_panel(args):
     eigenvec_id_dd = dcc.Dropdown(
         id=_arg('eigenvecID'), clearable=False, value=eid_value,
         options=[{'label': eid_value, 'value': eid_value}] if eid_value else [],
-        placeholder='(read the file first)',
+        placeholder='(not set)',
     )
     # selectedID may arrive as a ";"-joined string (e.g. after Restart); the
     # multi-select needs a list, and options must include the values to display.
@@ -144,7 +144,7 @@ def eigenvec_loader_panel(args):
     sel_options = [{'label': s, 'value': s} for s in sel] if sel else []
     selected_dd = dcc.Dropdown(
         id=_arg('selectedID'), multi=True, options=sel_options, value=sel,
-        placeholder='(all samples — read the file first)',
+        placeholder='(all samples)',
     )
     return dbc.Container(
         [
@@ -179,59 +179,107 @@ def eigenvec_loader_panel(args):
     )
 
 
-def annotation_loader_panel(args, has_embedded_annotation_cols=False):
-    """Annotation-tab content when no annotation is loaded: the annotation loader."""
+def _annotation_second_step(args):
+    """Dropdowns + Load, revealed once the annotation columns are known —
+    shared by both the plain and embedded-aware annotation_loader_panel.
+    """
+    return html.Div(
+        [
+            html.Hr(),
+            # Irrelevant in embedded-only mode (no separate file to match IDs
+            # against — the eigenvec's own 'id' column is used as-is); hidden
+            # by use_embedded_annotation / shown again by the other two modes.
+            html.Div(
+                _dependent_dropdown(args, 'annotationID', 'Annotation ID column',
+                                    'Column matching the eigenvec IDs.'),
+                id='annotationid-row',
+            ),
+            _dependent_dropdown(args, 'latitude', 'Latitude column',
+                                'Enables the map when latitude + longitude are set.'),
+            _dependent_dropdown(args, 'longitude', 'Longitude column', 
+                                'Enables the map when latitude + longitude are set.'),
+            _dependent_dropdown(args, 'time', 'Time column',
+                                'Enables the time plot.'),
+            _dependent_dropdown(args, 'group', 'Group / colour column',
+                                'Default grouping for colour.'),
+            _dependent_dropdown(args, 'group_shape', 'Group / shape column',
+                                'Default grouping for marker shape (categorical).'),
+            html.Div(dbc.Button('Load', id='annotation-load-btn', color='primary',
+                                size='lg', n_clicks=0), className='mt-3'),
+            html.Div(id='annotation-load-status', className='mt-2'),
+        ],
+        id='annotation-details',
+        style=_details_style(args, 'annotation'),
+    )
+
+
+def annotation_loader_panel(args, show_embedded_option=False, has_embedded_annotation_cols=False):
+    """Annotation-tab content when no annotation is loaded: the annotation loader.
+
+    Without ``show_embedded_option`` (the eigenvec is loaded and definitely has
+    no extra columns) this is the plain original flow: a file path, a "Read"
+    button, then the dropdowns once it succeeds.
+
+    With ``show_embedded_option`` (still possible — either not yet known while
+    the PCA tab's own loader is showing, or already confirmed via
+    ``has_embedded_annotation_cols``), three buttons do double duty as both the
+    mode choice and the "Read" step: "Use annotation from extra file" always
+    reads the path below and uses only it; "Use annotation from eigenvec file"
+    and "Combine annotation from eigenvec and extra file" only make sense once
+    the eigenvec is confirmed to have its own columns — see
+    callbacks/setup.py:read_eigenvec for the live reveal while still on the
+    PCA tab's loader.
+    """
     by = _actions_by_dest()
-    embedded_option = [
-        html.Div(
+    if not show_embedded_option:
+        return dbc.Container(
             [
-                dbc.Button('Use annotations from eigenvec file',
-                           id='use-embedded-annotation-btn', color='secondary',
-                           n_clicks=0),
-                html.Span('  Use the extra (non-dimension) columns already in the '
-                          'eigenvec file instead of a separate file.',
-                          className='text-muted small ms-2'),
+                html.H4('Load annotation data', className='mt-3'),
+                html.P('Optional metadata (regions, coordinates, dates, …). '
+                       'Load the eigenvec first (PCA tab).', className='text-muted'),
+                dcc.Store(id='annotation-source-store', data='file'),
+                _file_row('Annotation file', args, by['annotation'], 'browse-annotation',
+                          'Type a server-side path, or Browse.'),
+                html.Div(dbc.Button('Read', id='read-annotation-btn', color='secondary',
+                                    n_clicks=0), className='my-2'),
+                html.Div(id='embedded-annotation-status', className='mb-2'),
+                _annotation_second_step(args),
             ],
-            className='mb-2',
-        ),
-        html.Div(id='embedded-annotation-status', className='mb-3'),
-        html.Hr(),
-        html.P('— or read a separate annotation file —', className='text-muted mb-2'),
-    ] if has_embedded_annotation_cols else []
+            style={'maxWidth': '760px'},
+        )
+    embedded_buttons = html.Div(
+        [
+            dbc.Button('Use annotation from eigenvec file',
+                       id='use-embedded-annotation-btn', color='secondary',
+                       n_clicks=0, className='me-2 mb-2'),
+            dbc.Button('Combine annotation from eigenvec and extra file',
+                       id='use-combine-annotation-btn', color='secondary',
+                       n_clicks=0, className='me-2 mb-2'),
+        ],
+        id='embedded-annotation-section',
+        className='d-flex flex-wrap',
+        style={} if has_embedded_annotation_cols else {'display': 'none'},
+    )
+    file_help = ('Type a server-side path, or Browse. Only needed for "Use annotation '
+                'from extra file" or "Combine…" below.')
     return dbc.Container(
         [
             html.H4('Load annotation data', className='mt-3'),
             html.P('Optional metadata (regions, coordinates, dates, …). '
                    'Load the eigenvec first (PCA tab).', className='text-muted'),
             dcc.Store(id='annotation-source-store', data='file'),
-            *embedded_option,
-            _file_row('Annotation file', args, by['annotation'], 'browse-annotation',
-                      'Type a server-side path, or Browse.'),
-            html.Div(dbc.Button('Read', id='read-annotation-btn', color='secondary',
-                                n_clicks=0), className='my-2'),
-            html.Div(id='annotation-read-status', className='mb-2'),
-            # Second step: revealed by Read (see callbacks/setup.py:read_annotation).
+            _file_row('Annotation file', args, by['annotation'], 'browse-annotation', file_help),
             html.Div(
                 [
-                    html.Hr(),
-                    _dependent_dropdown(args, 'annotationID', 'Annotation ID column',
-                                        'Column matching the eigenvec IDs.'),
-                    _dependent_dropdown(args, 'latitude', 'Latitude column',
-                                        'Enables the map when latitude + longitude are set.'),
-                    _dependent_dropdown(args, 'longitude', 'Longitude column', None),
-                    _dependent_dropdown(args, 'time', 'Time column',
-                                        'Enables the time plot.'),
-                    _dependent_dropdown(args, 'group', 'Group / colour column',
-                                        'Default grouping for colour.'),
-                    _dependent_dropdown(args, 'group_shape', 'Group / shape column',
-                                        'Default grouping for marker shape (categorical).'),
-                    html.Div(dbc.Button('Load', id='annotation-load-btn', color='primary',
-                                        size='lg', n_clicks=0), className='mt-3'),
-                    html.Div(id='annotation-load-status', className='mt-2'),
+                    dbc.Button('Use annotation from extra file',
+                               id='use-file-annotation-btn', color='secondary',
+                               n_clicks=0, className='me-2 mb-2'),
+                    embedded_buttons,
                 ],
-                id='annotation-details',
-                style=_details_style(args, 'annotation'),
+                className='d-flex flex-wrap my-2',
             ),
+            html.Div(id='embedded-annotation-status', className='mb-2'),
+            _annotation_second_step(args),
         ],
         style={'maxWidth': '760px'},
     )

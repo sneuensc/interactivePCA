@@ -74,13 +74,57 @@ def create_app(args):
         if args.annotation:
             annotation, annotation_desc, annotation_cols = load_annotation(args.annotation, args)
             # The eigenvec file may itself carry extra (non-ID, non-dimension)
-            # columns (e.g. it was also usable in single-file mode). Since a real
-            # annotation file was given instead, drop those here rather than
-            # merging them in — otherwise a same-named column in both (e.g.
-            # "Region" in both the eigenvec file and the annotation file) gets
-            # silently suffixed _x/_y by the join, and every group/aesthetic/map
-            # lookup by that plain name breaks.
-            eigenvec = eigenvec[['id'] + pcs]
+            # columns (e.g. it was also usable in single-file mode).
+            dim_set = set(pcs)
+            annot_cols = [c for c in eigenvec.columns if c != 'id' and c not in dim_set]
+            if annot_cols and args.merge_embedded_annotation:
+                # Add them alongside the annotation file's own columns instead of
+                # discarding them — but a column already present in the file wins
+                # over a same-named one embedded in the eigenvec, so the merge
+                # below never sees a collision (which pandas would otherwise
+                # silently resolve by suffixing both copies _x/_y).
+                from .utils import make_unique_abbr
+                abbrev = make_unique_abbr(annot_cols, max_length=args.col_abbrev)
+                existing = set(annotation.columns)
+                keep_cols = [c for c, ab in zip(annot_cols, abbrev) if ab not in existing]
+                keep_abbrev = [ab for ab in abbrev if ab not in existing]
+                skipped = [c for c in annot_cols if c not in keep_cols]
+                if skipped:
+                    logging.info(f"   Skipped {len(skipped)} eigenvec column(s) already present "
+                                 f"in the annotation file: {', '.join(skipped)}.")
+                if keep_cols:
+                    eigenvec = eigenvec[['id'] + pcs + keep_cols]
+                    eigenvec.rename(columns=dict(zip(keep_cols, keep_abbrev)), inplace=True)
+                    extra_desc = pd.DataFrame({
+                        'Abbreviation': keep_abbrev,
+                        'Description': keep_cols,
+                        'Type': ['continuous' if eigenvec[c].dtype.kind in 'fi' else 'categorical'
+                                for c in keep_abbrev],
+                        'N_levels': [eigenvec[c].nunique(dropna=False)
+                                    if eigenvec[c].dtype.kind not in 'fi' else None
+                                    for c in keep_abbrev]
+                    })
+                    extra_desc['Dropdown'] = [
+                        'Yes' if ((typ == 'continuous') or
+                                 ((typ == 'categorical') and (nlev <= args.max_factors)))
+                        else ''
+                        for typ, nlev in zip(extra_desc['Type'], extra_desc['N_levels'])
+                    ]
+                    annotation_desc = pd.concat([annotation_desc, extra_desc], ignore_index=True)
+                    annotation_cols.update(resolve_annotation_columns(
+                        annotation_desc, args, default_id=annotation_cols.get('id')
+                    ))
+                    logging.info(f"   Added {len(keep_cols)} eigenvec column(s) to the "
+                                 f"annotation: {', '.join(keep_cols)}.")
+                else:
+                    eigenvec = eigenvec[['id'] + pcs]
+            else:
+                # Real annotation file only — drop the eigenvec's own extra
+                # columns rather than merging them in — otherwise a same-named
+                # column in both (e.g. "Region" in both the eigenvec file and
+                # the annotation file) gets silently suffixed _x/_y by the join,
+                # and every group/aesthetic/map lookup by that plain name breaks.
+                eigenvec = eigenvec[['id'] + pcs]
         elif args.ignore_embedded_annotation:
             # The PCA tab's own "Load" button relaunches with this set, so a plain
             # eigenvec load stays coordinates-only even if the file has extra
@@ -660,7 +704,7 @@ def create_app(args):
         app, args,
         show_eigenvec_loader=df is None,
         show_annotation_loader=annotation_desc is None,
-        show_embedded_annotation_button=has_embedded_annotation_cols,
+        show_embedded_annotation_button=(has_embedded_annotation_cols or df is None),
     )
 
     # Data-dependent callbacks need the DataFrame; skip them until data is loaded.
