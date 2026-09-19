@@ -48,6 +48,7 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
         show_annotation_table=show_annotation_table,
         show_map_plot=show_map_plot,
         show_time_plot=show_time_plot,
+        ANNOTATION_TIME=ANNOTATION_TIME,
     )
     register_plot_callbacks(
         app,
