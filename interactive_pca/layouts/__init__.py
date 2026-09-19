@@ -14,7 +14,7 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import html, dcc
 
-from ..utils import strip_ansi, dict_of_dicts_to_tuple
+from ..utils import strip_ansi, dict_of_dicts_to_tuple, nice_step, nice_bounds
 from ..plots import (
     generate_fig_scatter2d, generate_fig_scatter3d,
     create_geographical_map, generate_map_fig_scattergeo,
@@ -273,6 +273,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='right-panel-tabs-dummy', data=None),  # Dummy output for right-panel tab switching
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         dcc.Store(id='map-view-store', data=None),  # Current map view bbox, preserved across basemap toggle
+        dcc.Store(id='time-window-store', data={'enabled': False, 'lo': None, 'hi': None}),  # Time-slice window bounds, for the shaded band on the time plot
         dcc.Store(id='map-fill-dummy', data=None),  # Dummy output for the geo pane-fill clientside callback
         # File-loader stores + browser modal (Restart and the tab loaders relaunch through these)
         *setup_stores(),
@@ -323,8 +324,23 @@ def create_layout(args, df, pcs,
             # Restart → relaunch the process with no data → the setup wizard.
             dbc.Button(
                 'Restart', id='restart-btn', color='danger', outline=True,
-                size='sm', n_clicks=0, title='Return to the setup page',
-                style={'float': 'right', 'marginRight': '20px', 'marginTop': '14px'},
+                n_clicks=0, title='Return to the setup page',
+                style={'float': 'right', 'marginRight': '20px', 'marginTop': '14px',
+                      'fontSize': '14px'},
+            ),
+            html.Button(
+                'Export snapshot',
+                id='export-snapshot-btn',
+                title='Save current figures as a standalone HTML file',
+                style={
+                    'float': 'right', 'marginRight': '8px', 'marginTop': '14px',
+                    'padding': '6px 12px', 'fontSize': '14px',
+                    'border': '1px solid #0066cc',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#e8f0fe',
+                    'color': '#0066cc',
+                    'cursor': 'pointer'
+                }
             ),
         ], style={
             'backgroundColor': '#f8f9fa',
@@ -510,54 +526,61 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
         
         # Right side controls
-        html.Div([
-            html.Div(
-                id='selection-counter',
-                children='Selected: 0',
-                style={
-                    'marginRight': '16px',
-                    'fontSize': '13px',
-                    'color': '#333',
-                    'fontWeight': 'bold'
-                }
-            ),
-            html.Button(
-                'Select all',
-                id='select-all-button',
-                style={
-                    'padding': '6px 12px',
-                    'border': '1px solid #ccc',
-                    'borderRadius': '4px',
-                    'backgroundColor': '#ffffff',
-                    'cursor': 'pointer',
-                    'marginRight': '8px'
-                }
-            ),
-            html.Button(
-                'Save selection',
-                id='save-selection',
-                style={
-                    'padding': '6px 12px',
-                    'border': '1px solid #ccc',
-                    'borderRadius': '4px',
-                    'backgroundColor': '#ffffff',
-                    'cursor': 'pointer'
-                }
-            ),
-            html.Button(
-                'Export snapshot',
-                id='export-snapshot-btn',
-                title='Save current figures as a standalone HTML file',
-                style={
-                    'padding': '6px 12px',
-                    'border': '1px solid #0066cc',
-                    'borderRadius': '4px',
-                    'backgroundColor': '#e8f0fe',
-                    'color': '#0066cc',
-                    'cursor': 'pointer'
-                }
-            ),
-        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+        html.Fieldset([
+            html.Legend('Selection', style={
+                'fontSize': '12px', 'fontWeight': 'bold', 'color': '#555',
+                'padding': '0 6px', 'width': 'auto', 'marginBottom': '0'
+            }),
+            html.Div([
+                html.Div(
+                    id='selection-counter',
+                    children='Selected: 0',
+                    style={
+                        'marginRight': '8px',
+                        'fontSize': '13px',
+                        'color': '#333',
+                        'fontWeight': 'bold'
+                    }
+                ),
+                html.Div(
+                    id='selection-source-label',
+                    children='',
+                    title='What last changed the current selection',
+                    style={
+                        'marginRight': '8px',
+                        'fontSize': '12px',
+                        'color': '#777',
+                        'fontStyle': 'italic'
+                    }
+                ),
+                html.Button(
+                    'Reset',
+                    id='select-all-button',
+                    title='Clear the current selection/time-slice and select every sample',
+                    style={
+                        'padding': '6px 12px',
+                        'border': '1px solid #ccc',
+                        'borderRadius': '4px',
+                        'backgroundColor': '#ffffff',
+                        'cursor': 'pointer'
+                    }
+                ),
+                html.Button(
+                    'Save selection',
+                    id='save-selection',
+                    style={
+                        'padding': '6px 12px',
+                        'border': '1px solid #ccc',
+                        'borderRadius': '4px',
+                        'backgroundColor': '#ffffff',
+                        'cursor': 'pointer'
+                    }
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+        ], style={
+            'border': '1px solid #ccc', 'borderRadius': '4px',
+            'padding': '2px 12px 6px', 'margin': '0'
+        }),
     ], style={
         'display': 'flex',
         'alignItems': 'center',
@@ -684,9 +707,43 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 )
             )
             
-            if default_continuous == ANNOTATION_TIME:
+            time_is_reversed = default_continuous == ANNOTATION_TIME
+            if time_is_reversed:
                 fig_time.update_xaxes(autorange='reversed')
-            
+
+            # Time-slice slider: bounds/defaults from the initial time-variable's
+            # range; callbacks/selection.py recomputes these when the user
+            # switches which continuous column the panel shows.
+            time_min = float(time_vals.min())
+            time_max = float(time_vals.max())
+            time_span = time_max - time_min
+            default_window_size = nice_step(time_span / 10) if time_span > 0 else 1
+            slider_step = nice_step(time_span / 200) if time_span > 0 else 1
+            # Round the bounds themselves outward to the nearest step too — a
+            # step of 100 but bounds of 1450/13282 would still put every
+            # position off the round grid (1450, 1550, ...). Widening is
+            # always safe; it never excludes real data.
+            bound_lo, bound_hi = nice_bounds(time_min, time_max, slider_step)
+            default_hi = min(bound_lo + default_window_size, bound_hi)
+            slider_min, slider_max = bound_lo, bound_hi
+            slider_value = [bound_lo, default_hi]
+            # min/max/value always stay in plain ascending order — rc-slider
+            # maps them straight onto aria-valuemin/aria-valuemax, and a
+            # swapped (min > max) config makes some browsers reject edits with
+            # a native validation warning. The reversed-axis look (larger
+            # values on the left, matching the graph) instead comes from the
+            # RangeSlider's own `reverse` prop (a real Radix-slider feature —
+            # `inverted` under the hood — not a CSS hack). Its built-in min/max
+            # number inputs don't reorder themselves though, so
+            # assets/time_slider.css swaps them via this className. The
+            # prev/next arrows point away from the slider on whichever side
+            # they end up on — reversed swaps which button (by id, since each
+            # id's callback always moves the window the same raw direction)
+            # lands on which side, via flex order, not by moving them in the DOM.
+            prev_label, next_label = ('▶', '◀') if time_is_reversed else ('◀', '▶')
+            prev_order, next_order = (4, 2) if time_is_reversed else (2, 4)
+            slider_wrap_class = 'time-slider-reversed' if time_is_reversed else ''
+
             time_hist = html.Div([
                 html.Div([
                     html.Label('Variable:', style={'marginRight': '8px', 'fontWeight': 'bold', 'fontSize': '13px'}),
@@ -697,7 +754,16 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         clearable=False,
                         style={'width': '180px', 'fontSize': '13px'}
                     ),
-                    html.Label('View:', style={'marginRight': '8px', 'marginLeft': '16px', 'fontWeight': 'bold', 'fontSize': '13px'}),
+                    html.Div(
+                        dbc.Checkbox(
+                            id='time-invert-toggle', value=time_is_reversed, label='Invert',
+                            style={'fontSize': '13px', 'whiteSpace': 'nowrap'},
+                        ),
+                        className='mx-3',
+                        title='Reverse the axis direction. Set automatically for the actual '
+                              '--time column; change freely for any variable.'
+                    ),
+                    html.Label('View:', style={'marginRight': '8px', 'marginLeft': '0', 'fontWeight': 'bold', 'fontSize': '13px'}),
                     dcc.Dropdown(
                         id='time-viz-mode',
                         options=[
@@ -709,13 +775,44 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         clearable=False,
                         style={'width': '160px', 'fontSize': '13px'}
                     ),
+                    dbc.Checkbox(
+                        id='time-window-enabled', value=False, label='Time slice',
+                        className='ms-4', style={'fontSize': '13px', 'whiteSpace': 'nowrap'}
+                    ),
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px', 'padding': '8px 12px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'}),
                 dcc.Graph(
                     id='time-histogram',
                     figure=fig_time,
-                    style={'height': '100%'},
+                    style={'flex': '1', 'minHeight': '0'},
                     clear_on_unhover=True
-                )
+                ),
+                # Revealed only once "Time slice" above is checked (see
+                # callbacks/selection.py:sync_time_window_to_selection).
+                html.Div([
+                    html.Label('Window size:', style={'marginRight': '8px', 'fontSize': '13px', 'whiteSpace': 'nowrap'}),
+                    dbc.Input(
+                        id='time-window-size', type='number', value=default_window_size,
+                        step=slider_step, disabled=True, debounce=True,
+                        style={'width': '110px', 'marginRight': '20px', 'fontSize': '13px'}
+                    ),
+                    dbc.Button(prev_label, id='time-window-prev-btn', size='sm', color='light',
+                              disabled=True, className='me-2', style={'order': prev_order}),
+                    html.Div(
+                        dcc.RangeSlider(
+                            id='time-window-range',
+                            min=slider_min, max=slider_max, step=slider_step,
+                            value=slider_value, reverse=time_is_reversed,
+                            allowCross=False, marks={}, updatemode='mouseup', disabled=True,
+                            tooltip={'placement': 'bottom', 'always_visible': False},
+                        ),
+                        id='time-window-slider-wrap',
+                        className=slider_wrap_class,
+                        style={'flex': '1', 'order': 3}
+                    ),
+                    dbc.Button(next_label, id='time-window-next-btn', size='sm', color='light',
+                              disabled=True, className='ms-2', style={'order': next_order}),
+                ], id='time-window-controls-row', className='p-2 mt-2 bg-light rounded',
+                   style={'display': 'none', 'alignItems': 'center'}),
             ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
     
     # Create left pane with optional time plot

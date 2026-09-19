@@ -225,7 +225,23 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                         if (p) px = {{x: p[0], y: p[1]}};
                     }} else {{
                         var mapGL = getMapGL(plotDiv);
-                        if (mapGL && mapGL.project) px = mapGL.project([lon, lat]);
+                        if (mapGL && mapGL.project) {{
+                            px = mapGL.project([lon, lat]);
+                            // mapGL.project() is canvas-relative, but the hover
+                            // layer/paper below is paper-relative — shift by the
+                            // canvas's offset within the paper so px lines up.
+                            var canvasEl = mapGL.getCanvas && mapGL.getCanvas();
+                            var paperEl = plotDiv._fullLayout._paper &&
+                                          plotDiv._fullLayout._paper.node();
+                            if (canvasEl && paperEl) {{
+                                var canvasRect = canvasEl.getBoundingClientRect();
+                                var paperRect = paperEl.getBoundingClientRect();
+                                px = {{
+                                    x: px.x + (canvasRect.left - paperRect.left),
+                                    y: px.y + (canvasRect.top - paperRect.top)
+                                }};
+                            }}
+                        }}
                     }}
                     if (px) {{
                         var container = getHoverContainer(plotDiv, trace);
@@ -242,6 +258,11 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                                 idealAlign: px.x < plotDiv.clientWidth / 2 ? 'right' : 'left'
                             }}, {{
                                 container: container,
+                                // Without this, Plotly measures the text's vertical
+                                // offset against the (empty/stale) hoverlayer's own
+                                // bbox instead of the plot area, so the label text
+                                // drifts away from its background box.
+                                outerContainer: plotDiv._fullLayout._paper.node(),
                                 gd: plotDiv
                             }});
                         }} else if (!geo) {{

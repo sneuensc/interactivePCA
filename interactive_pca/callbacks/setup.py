@@ -64,8 +64,8 @@ def _guess_annotation_dependent(columns):
     """
     return {
         'annotationID': _guess(columns, 'genetic id', 'id', 'sample', 'iid'),
-        'latitude': _guess(columns, 'lat', 'latitude'),
-        'longitude': _guess(columns, 'long', 'lon', 'longitude'),
+        'latitude': _guess(columns, 'lat', 'lat.', 'latitude'),
+        'longitude': _guess(columns, 'long', 'long.', 'lon', 'longitude'),
         'time': _guess(columns, 'date', 'time', 'age', 'year'),
         'group': _guess(columns, 'group', 'region', 'population', 'pop'),
     }

@@ -429,12 +429,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('dropdown-group-symbol', 'value'),
             Input('symbol-aesthetics-store', 'data'),
             Input('save-trigger-store', 'data'),
+            Input('time-window-store', 'data'),
+            Input('time-invert-toggle', 'value'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             prevent_initial_call=False
         )
         def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store,
-                                   group_symbol, symbol_store, _save_tick,
+                                   group_symbol, symbol_store, _save_tick, time_window, invert_axis,
                                    hover_detailed, selected_cols):
             if time_variable is None or time_variable not in df.columns:
                 return {}
@@ -656,7 +658,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     namelength=-1
                 )
             )
-            if time_variable == ANNOTATION_TIME:
+            if invert_axis:
                 fig.update_xaxes(autorange='reversed')
 
             fig.add_trace(go.Scatter(
@@ -668,6 +670,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 showlegend=False,
                 hovertemplate='<extra></extra>'
             ))
+
+            # Shaded band showing where the time-slice window currently sits —
+            # purely a visual anchor; the selection highlighting itself comes
+            # from selection-store like any other selection source.
+            if time_window and time_window.get('enabled') and time_window.get('lo') is not None:
+                fig.add_vrect(x0=time_window['lo'], x1=time_window['hi'],
+                              fillcolor='LightSalmon', opacity=0.15,
+                              layer='below', line_width=0)
 
             # Apply hover text formatting
             fig_dict = fig.to_dict()

@@ -1,0 +1,18 @@
+/* Companion to the time-slice RangeSlider's `reverse` prop, toggled together
+   with it (see callbacks/selection.py:apply_time_invert_style, which sets
+   the 'time-slider-reversed' class on #time-window-slider-wrap).
+
+   `reverse` (a real Radix-slider `inverted` feature — not a CSS hack) already
+   flips the track and thumbs correctly. But it doesn't reorder the
+   RangeSlider's own built-in min/max number inputs (rendered as
+   .dash-range-slider-min-input / -max-input, always showing value[0] /
+   value[-1] regardless of `reverse`), so the min field would stay on the
+   left even once the larger value visually renders there. This swaps their
+   flex order to match. */
+.time-slider-reversed .dash-range-slider-min-input {
+    order: 2;
+}
+
+.time-slider-reversed .dash-range-slider-max-input {
+    order: 0;
+}

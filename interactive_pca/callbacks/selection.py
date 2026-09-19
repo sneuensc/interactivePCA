@@ -9,13 +9,16 @@ import logging
 import pandas as pd
 import numpy as np
 import dash
-from dash import Input, Output, State
+from dash import Input, Output, State, ctx
+
+from ..utils import nice_step, nice_bounds
 
 
-def register_selection_callbacks(app, df, annotation_desc, show_annotation_table=True, show_map_plot=True, show_time_plot=True):
+def register_selection_callbacks(app, df, annotation_desc, show_annotation_table=True, show_map_plot=True,
+                                 show_time_plot=True, ANNOTATION_TIME=None):
     """
     Register all selection-related callbacks.
-    
+
     Args:
         app: Dash app instance
         df: Main DataFrame
@@ -23,6 +26,8 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         show_annotation_table: Whether annotation table UI is rendered
         show_map_plot: Whether map plot is rendered and should receive callbacks
         show_time_plot: Whether the time plot is rendered and should receive callbacks
+        ANNOTATION_TIME: The actual --time column (or None) — its plot axis is
+            reversed (layouts/__init__.py), so the time-slice slider mirrors it
     """
     
     @app.callback(
@@ -50,7 +55,17 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             return f"Selected: {n_selected} / {n_total}  ({n_hidden} hidden)"
 
         return f"Selected: {len(sel_ids)} / {n_total}"
-    
+
+    @app.callback(
+        Output('selection-source-label', 'children'),
+        Input('selected-source', 'data'),
+    )
+    def show_selection_source(source):
+        """Label next to the counter saying what last changed the selection."""
+        if not source or source == 'initial':
+            return ''
+        return f"(via {source})"
+
     @app.callback(
         Output('hover-detailed', 'data'),
         Input('hover-detailed-toggle', 'value')
@@ -96,7 +111,9 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         logging.info(f"Saved {len(selected_ids)} selected IDs to {output_file}")
     
     def _apply_all_selected(fig):
-        """Set selectedpoints to all indices on every trace that has customdata."""
+        """Set selectedpoints to all indices on every trace that has customdata,
+        and clear any drawn lasso/box-select outline — otherwise a stale shape
+        lingers on the plot even though every point is selected again."""
         if not fig:
             return fig
         all_ids = df['id'].tolist()
@@ -109,11 +126,15 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
                 trace['selectedpoints'] = np.where(mask)[0].tolist()
             else:
                 trace.pop('selectedpoints', None)
+        if fig.get('layout', {}).get('selections'):
+            fig['layout']['selections'] = []
         return fig
 
     if show_map_plot and show_time_plot:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
+            Output('time-window-enabled', 'value'),
             Output('pca-plot', 'figure', allow_duplicate=True),
             Output('pca-map-plot', 'figure', allow_duplicate=True),
             Output('time-histogram', 'figure', allow_duplicate=True),
@@ -127,11 +148,15 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
             all_ids = df['id'].tolist()
-            return all_ids, _apply_all_selected(pca_fig), _apply_all_selected(map_fig), _apply_all_selected(time_fig)
+            # Also turn off an active time-slice — otherwise its own sync
+            # callback would just overwrite this reset the next time it fires.
+            return (all_ids, 'Reset', False, _apply_all_selected(pca_fig),
+                    _apply_all_selected(map_fig), _apply_all_selected(time_fig))
 
     elif show_map_plot:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
             Output('pca-plot', 'figure', allow_duplicate=True),
             Output('pca-map-plot', 'figure', allow_duplicate=True),
             Input('select-all-button', 'n_clicks'),
@@ -143,11 +168,13 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
             all_ids = df['id'].tolist()
-            return all_ids, _apply_all_selected(pca_fig), _apply_all_selected(map_fig)
+            return all_ids, 'Reset', _apply_all_selected(pca_fig), _apply_all_selected(map_fig)
 
     elif show_time_plot:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
+            Output('time-window-enabled', 'value'),
             Output('pca-plot', 'figure', allow_duplicate=True),
             Output('time-histogram', 'figure', allow_duplicate=True),
             Input('select-all-button', 'n_clicks'),
@@ -159,11 +186,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
             all_ids = df['id'].tolist()
-            return all_ids, _apply_all_selected(pca_fig), _apply_all_selected(time_fig)
+            return all_ids, 'Reset', False, _apply_all_selected(pca_fig), _apply_all_selected(time_fig)
 
     else:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
             Output('pca-plot', 'figure', allow_duplicate=True),
             Input('select-all-button', 'n_clicks'),
             State('pca-plot', 'figure'),
@@ -173,11 +201,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
             all_ids = df['id'].tolist()
-            return all_ids, _apply_all_selected(pca_fig)
+            return all_ids, 'Reset', _apply_all_selected(pca_fig)
     
     if show_annotation_table:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
             Output('pca-filter-error-message', 'children'),
             Input('pca-filter-query', 'value'),
             prevent_initial_call=True
@@ -185,12 +214,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         def filter_pca_table_and_sync_selection(query_string):
             """Filter samples based on pandas query and update selection."""
             if not query_string or query_string.strip() == '':
-                return df['id'].tolist(), ""
+                return df['id'].tolist(), 'Reset', ""
             try:
                 filtered_df = df.query(query_string)
-                return filtered_df['id'].tolist(), ""
+                return filtered_df['id'].tolist(), 'query filter', ""
             except Exception as e:
-                return dash.no_update, f"Query error: {str(e)}"
+                return dash.no_update, dash.no_update, f"Query error: {str(e)}"
     
     @app.callback(
         Output('legend-toggle-container', 'style'),
@@ -281,6 +310,7 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
     if show_annotation_table:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
             Input('pca-annotation-table', 'filterModel'),
             State('pca-annotation-table', 'virtualRowData'),
             prevent_initial_call=True
@@ -288,17 +318,18 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         def sync_table_filter_to_selection(filter_model, virtual_row_data):
             """Sync the table's column-filter result to selection-store and plots."""
             if filter_model is None:
-                return dash.no_update
+                return dash.no_update, dash.no_update
             if not filter_model:
                 # All filters cleared — restore full selection
-                return df['id'].tolist()
+                return df['id'].tolist(), 'Reset'
             if not virtual_row_data:
-                return []
-            return sorted([str(row['id']) for row in virtual_row_data if 'id' in row])
+                return [], 'table filter'
+            return sorted([str(row['id']) for row in virtual_row_data if 'id' in row]), 'table filter'
 
     if show_annotation_table:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
             Output('hidden-groups-store', 'data', allow_duplicate=True),
             Input('pca-annotation-table', 'cellValueChanged'),
             State('selection-store', 'data'),
@@ -309,9 +340,9 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         def table_status_to_stores(cell_change, selected_ids, hidden_store, group):
             """Apply Status dropdown change to selection-store and hidden-groups-store."""
             if not cell_change or 'data' not in cell_change:
-                return dash.no_update, dash.no_update
+                return dash.no_update, dash.no_update, dash.no_update
             if cell_change.get('colId') != 'Status':
-                return dash.no_update, dash.no_update
+                return dash.no_update, dash.no_update, dash.no_update
 
             row = cell_change.get('data') or {}
             row_id = str(row.get('id', ''))
@@ -319,7 +350,7 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             group_val = str(row.get('_group_val', ''))
 
             if not row_id or new_status not in ('selected', 'unselected', 'hidden'):
-                return dash.no_update, dash.no_update
+                return dash.no_update, dash.no_update, dash.no_update
 
             # ── selection-store ──────────────────────────────────────────────
             current_sel = set(str(sid) for sid in (selected_ids or []))
@@ -329,11 +360,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             else:
                 new_sel.discard(row_id)
             sel_out = sorted(new_sel) if new_sel != current_sel else dash.no_update
+            source_out = 'table status edit' if sel_out is not dash.no_update else dash.no_update
 
             # ── hidden-groups-store ──────────────────────────────────────────
             is_categorical = group and group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi'
             if not is_categorical or not group_val:
-                return sel_out, dash.no_update
+                return sel_out, source_out, dash.no_update
 
             new_hidden = dict(hidden_store or {})
             hidden_vals = set(str(g) for g in new_hidden.get(group, []))
@@ -344,7 +376,7 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             new_hidden[group] = sorted(hidden_vals)
             hidden_out = new_hidden if new_hidden.get(group) != (hidden_store or {}).get(group) else dash.no_update
 
-            return sel_out, hidden_out
+            return sel_out, source_out, hidden_out
     
     if show_annotation_table:
         @app.callback(
@@ -378,6 +410,7 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
     
     @app.callback(
         Output('selection-store', 'data'),
+        Output('selected-source', 'data', allow_duplicate=True),
         Input('pca-plot', 'selectedData'),
         prevent_initial_call=True
     )
@@ -389,39 +422,198 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         do NOT clear the active selection.  Use the 'Select all' button to reset.
         """
         if not selected_data or 'points' not in selected_data or not selected_data['points']:
-            return dash.no_update
+            return dash.no_update, dash.no_update
         selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
         selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
-        return sorted(list(set(selected_ids))) if selected_ids else dash.no_update
-    
+        if not selected_ids:
+            return dash.no_update, dash.no_update
+        return sorted(list(set(selected_ids))), 'lasso on PCA plot'
+
     if show_map_plot:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
             Input('pca-map-plot', 'selectedData'),
             prevent_initial_call=True
         )
         def map_plot_to_selection_store(selected_data):
             """Convert lasso/box selection on map to IDs. Returns no_update on empty."""
             if not selected_data or 'points' not in selected_data or not selected_data['points']:
-                return dash.no_update
+                return dash.no_update, dash.no_update
             selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
             selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
-            return sorted(list(set(selected_ids))) if selected_ids else dash.no_update
-    
+            if not selected_ids:
+                return dash.no_update, dash.no_update
+            return sorted(list(set(selected_ids))), 'lasso on map'
+
     if show_time_plot:
         @app.callback(
             Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
             Input('time-histogram', 'selectedData'),
             prevent_initial_call=True
         )
         def time_plot_to_selection_store(selected_data):
             """Convert lasso/box selection on time plot to IDs. Returns no_update on empty."""
             if not selected_data or 'points' not in selected_data or not selected_data['points']:
-                return dash.no_update
+                return dash.no_update, dash.no_update
             selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
             selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
-            return sorted(list(set(selected_ids))) if selected_ids else dash.no_update
-    
+            if not selected_ids:
+                return dash.no_update, dash.no_update
+            return sorted(list(set(selected_ids))), 'lasso on time plot'
+
+        @app.callback(
+            Output('time-window-range', 'min'),
+            Output('time-window-range', 'max'),
+            Output('time-window-range', 'step'),
+            Output('time-window-range', 'value', allow_duplicate=True),
+            Output('time-window-size', 'step'),
+            Output('time-window-size', 'value', allow_duplicate=True),
+            Input('time-variable', 'value'),
+            prevent_initial_call=True
+        )
+        def reset_time_window_range(time_col):
+            """Re-derive the slider's bounds/defaults when the time panel switches
+            to a different continuous column, so the window always matches
+            whatever's currently shown."""
+            if time_col not in df.columns:
+                return dash.no_update
+            time_vals = df[time_col].dropna()
+            if time_vals.empty:
+                return dash.no_update
+            lo, hi = float(time_vals.min()), float(time_vals.max())
+            span = hi - lo
+            step = nice_step(span / 200) if span > 0 else 1
+            default_size = nice_step(span / 10) if span > 0 else 1
+            bound_lo, bound_hi = nice_bounds(lo, hi, step)
+            default_hi = min(bound_lo + default_size, bound_hi)
+            value = [bound_lo, default_hi]
+            return bound_lo, bound_hi, step, value, step, default_size
+
+        @app.callback(
+            Output('time-invert-toggle', 'value'),
+            Input('time-variable', 'value'),
+            prevent_initial_call=True
+        )
+        def auto_set_time_invert_default(time_col):
+            """Default 'Invert' to on for the actual --time column, off for any
+            other variable — the user can still toggle it freely afterwards;
+            switching variables again just re-applies this default."""
+            return time_col == ANNOTATION_TIME
+
+        @app.callback(
+            Output('time-window-range', 'reverse'),
+            Output('time-window-slider-wrap', 'className'),
+            Output('time-window-prev-btn', 'children'),
+            Output('time-window-next-btn', 'children'),
+            Output('time-window-prev-btn', 'style'),
+            Output('time-window-next-btn', 'style'),
+            Input('time-invert-toggle', 'value'),
+            prevent_initial_call=True
+        )
+        def apply_time_invert_style(inverted):
+            """Mirror the time-slice slider to match the plot's axis direction
+            whenever 'Invert' is on, for whichever variable is shown.
+
+            The slider itself flips via its own `reverse` prop (a real
+            Radix-slider feature, not a CSS hack — min/max/value stay in plain
+            ascending order either way). Its built-in min/max number inputs
+            don't reorder themselves though, so the className swap (see
+            assets/time_slider.css) handles those. The prev/next arrows swap
+            which physical side they sit on (flex order) to match, so each
+            still points away from the slider in the direction it actually
+            moves the window.
+            """
+            wrap_class = 'time-slider-reversed' if inverted else ''
+            prev_label, next_label = ('▶', '◀') if inverted else ('◀', '▶')
+            prev_order, next_order = (4, 2) if inverted else (2, 4)
+            return (bool(inverted), wrap_class, prev_label, next_label,
+                    {'order': prev_order}, {'order': next_order})
+
+        @app.callback(
+            Output('time-window-range', 'value', allow_duplicate=True),
+            Input('time-window-prev-btn', 'n_clicks'),
+            Input('time-window-next-btn', 'n_clicks'),
+            State('time-window-range', 'value'),
+            State('time-window-range', 'min'),
+            State('time-window-range', 'max'),
+            prevent_initial_call=True
+        )
+        def step_time_window(_prev, _next, range_val, true_min, true_max):
+            """Jump the window forward/back by exactly one window size, keeping
+            its width constant (bounced back into range at either end). 'Next'
+            means forward in raw value regardless of the reversed-axis CSS
+            mirror, which only affects rendering, never min/max/value order."""
+            if not range_val or true_min is None or true_max is None:
+                return dash.no_update
+            lo, hi = range_val
+            size = hi - lo
+            delta = size if ctx.triggered_id == 'time-window-next-btn' else -size
+            new_lo, new_hi = lo + delta, hi + delta
+            if new_lo < true_min:
+                shift = true_min - new_lo
+                new_lo += shift
+                new_hi += shift
+            if new_hi > true_max:
+                shift = new_hi - true_max
+                new_lo -= shift
+                new_hi -= shift
+            return [new_lo, new_hi]
+
+        _TIME_WINDOW_ROW_HIDDEN = {'display': 'none', 'alignItems': 'center'}
+        _TIME_WINDOW_ROW_VISIBLE = {'display': 'flex', 'alignItems': 'center'}
+
+        @app.callback(
+            Output('selection-store', 'data', allow_duplicate=True),
+            Output('selected-source', 'data', allow_duplicate=True),
+            Output('time-window-store', 'data'),
+            Output('time-window-range', 'value', allow_duplicate=True),
+            Output('time-window-size', 'value', allow_duplicate=True),
+            Output('time-window-size', 'disabled'),
+            Output('time-window-range', 'disabled'),
+            Output('time-window-prev-btn', 'disabled'),
+            Output('time-window-next-btn', 'disabled'),
+            Output('time-window-controls-row', 'style'),
+            Input('time-window-enabled', 'value'),
+            Input('time-window-size', 'value'),
+            Input('time-window-range', 'value'),
+            State('time-variable', 'value'),
+            prevent_initial_call=True
+        )
+        def sync_time_window_to_selection(enabled, size, range_val, time_col):
+            """The time-slice controls are just another selection source — like a
+            lasso or the query filter, moving the window overrides whatever was
+            selected before. Turning it off restores the full selection.
+
+            The range slider is the source of truth for [lo, hi]; typing a new
+            size instead stretches/shrinks it from the left edge and pushes the
+            result back into the slider. Dragging the slider (either handle, or
+            the block between them to move both at once) just updates the size
+            box to match, without feeding back into the slider itself.
+            """
+            if not enabled or time_col not in df.columns or not range_val:
+                return (df['id'].tolist(), 'Reset', {'enabled': False, 'lo': None, 'hi': None},
+                        dash.no_update, dash.no_update, True, True, True, True, _TIME_WINDOW_ROW_HIDDEN)
+            lo, hi = range_val
+            range_output = dash.no_update
+            if ctx.triggered_id == 'time-window-size' and size is not None:
+                col_max = float(df[time_col].max())
+                hi = min(lo + size, col_max)
+                range_output = [lo, hi]
+            else:
+                size = round(hi - lo, 6)
+            ids = df.loc[df[time_col].between(lo, hi), 'id'].tolist()
+            if not ids:
+                # An empty list is the app-wide sentinel for "no filter, show
+                # everything" (see update_pca_selection's `if not selected_ids`),
+                # so a window that genuinely matches nothing would otherwise be
+                # read as no selection at all. Use an id that can never match a
+                # real point instead, so every panel correctly dims everything.
+                ids = ['__time_window_empty__']
+            return (ids, 'time slice', {'enabled': True, 'lo': lo, 'hi': hi}, range_output, size,
+                    False, False, False, False, _TIME_WINDOW_ROW_VISIBLE)
+
     # === Selection store to plot callbacks ===
     
     @app.callback(
