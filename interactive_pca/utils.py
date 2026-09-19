@@ -4,9 +4,45 @@ Utility functions for text processing and data cleaning.
 
 import re
 import json
+import math
 import difflib
 from collections import defaultdict
 import pandas as pd
+
+
+def nice_step(x):
+    """
+    Round x up to a 'nice' number for a slider step or default window size —
+    1, 2, or 5 times a power of 10 (the same convention plotting libraries use
+    for axis tick spacing), so users see round numbers like 1000 or 50 instead
+    of a raw fraction of the data range like 1183.2 or 59.16.
+    """
+    if x <= 0:
+        return 1
+    exponent = math.floor(math.log10(x))
+    fraction = x / (10 ** exponent)
+    if fraction <= 1:
+        nice_fraction = 1
+    elif fraction <= 2:
+        nice_fraction = 2
+    elif fraction <= 5:
+        nice_fraction = 5
+    else:
+        nice_fraction = 10
+    step = nice_fraction * (10 ** exponent)
+    return int(step) if step >= 1 else step
+
+
+def nice_bounds(lo, hi, step):
+    """
+    Round a [lo, hi] range outward to the nearest multiple of `step` — floor
+    for lo, ceil for hi — so slider positions land on round numbers (e.g.
+    1400/13300 instead of the raw data extremes 1450/13282) without ever
+    excluding real data (widening the range is always safe, narrowing isn't).
+    """
+    if step <= 0:
+        return lo, hi
+    return math.floor(lo / step) * step, math.ceil(hi / step) * step
 
 
 def make_unique_abbr(cur_list, max_length=3):
