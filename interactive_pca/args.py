@@ -47,7 +47,16 @@ def create_parser(script_name='Script'):
                        help='Dimension column names, comma-separated (e.g. PC1,PC2,PC3). '
                             'If not provided, auto-detects columns with a prefix followed by increasing numbers.')
     parser.add_argument('--selectedID', type=str, default=None, required=False, metavar="IDs",
-                       help='Selected samples, given as comma separated IDs, or as a file with each ID on a line (default: all)')
+                       help='Which samples start selected: ";"- or ","-separated IDs or '
+                            'wildcard patterns (e.g. "S1;S2" or "*.SG"; prefix a token with '
+                            '"!" to exclude it, e.g. "!*.DG" for everyone but *.DG), or a '
+                            'file with each ID on a line (default: all)')
+    parser.add_argument('--subsetID', type=str, default=None, required=False, metavar="IDs",
+                       help='Restrict which samples are loaded at all (everything else is '
+                            'skipped entirely, not just left unselected): ";"- or ","-separated '
+                            'IDs or wildcard patterns (e.g. "S1;S2" or "*.SG"; prefix a token '
+                            'with "!" to exclude it, e.g. "!*.DG" for everyone but *.DG), or '
+                            'a file with each ID on a line (default: load all)')
 
     # Annotation
     parser.add_argument('--annotation', type=str, default=None, metavar="FILE",

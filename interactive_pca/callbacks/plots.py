@@ -431,13 +431,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('save-trigger-store', 'data'),
             Input('time-window-store', 'data'),
             Input('time-invert-toggle', 'value'),
+            Input('time-per-group-toggle', 'value'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             prevent_initial_call=False
         )
         def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store,
                                    group_symbol, symbol_store, _save_tick, time_window, invert_axis,
-                                   hover_detailed, selected_cols):
+                                   per_group, hover_detailed, selected_cols):
             if time_variable is None or time_variable not in df.columns:
                 return {}
 
@@ -490,7 +491,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 default_opacity = aesthetics['opacity'].get('default', 0.7)
                 _cat_strip = False   # whether we drew per-group y-bands
 
-                if group != 'none' and group in df.columns:
+                if per_group and group != 'none' and group in df.columns:
                     group_vals = df.loc[time_vals.index, group]
                     if df[group].dtype.kind in 'fi':
                         # Continuous variable — single strip with colorscale
@@ -610,6 +611,64 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
                         autosize=True,
                         dragmode='lasso',
+                        margin=dict(l=50, r=20, t=40, b=40)
+                    )
+
+            elif viz_mode == 'violin':
+                # Distribution shape per group (or across all data), time on x
+                # to match every other view mode — no per-point selection here,
+                # a violin is an aggregate density shape, not individual points.
+                default_opacity = aesthetics['opacity'].get('default', 0.7)
+                color_map = aesthetics.get('color', {})
+
+                if (per_group and group != 'none' and group in df.columns
+                        and df[group].dtype.kind not in 'fi'):
+                    group_vals = df.loc[time_vals.index, group]
+                    unique_vals = [val for val in group_vals.unique() if not pd.isna(val)]
+                    order = aesthetics.get('order')
+                    if order:
+                        rev = list(reversed(order))
+                        omap = {v: i for i, v in enumerate(rev)}
+                        unique_vals.sort(key=lambda v: omap.get(str(v), -1))
+                    for val in unique_vals:
+                        mask = group_vals == val
+                        fig.add_trace(go.Violin(
+                            x=time_vals[mask],
+                            y=[str(val)] * int(mask.sum()),
+                            orientation='h',
+                            name=str(val),
+                            line_color=color_map.get(str(val), default_color),
+                            opacity=default_opacity,
+                            box_visible=True,
+                            meanline_visible=True,
+                            points=False,
+                            showlegend=False,
+                        ))
+                    fig.update_layout(
+                        xaxis_title=time_variable,
+                        yaxis=dict(showgrid=True, zeroline=False),
+                        showlegend=False,
+                        autosize=True,
+                        margin=dict(l=80, r=20, t=40, b=40),
+                    )
+                else:
+                    # No grouping (or a continuous group, which a violin can't
+                    # split into discrete shapes) — one violin across all data.
+                    fig.add_trace(go.Violin(
+                        x=time_vals,
+                        orientation='h',
+                        name='All samples',
+                        line_color=default_color,
+                        opacity=default_opacity,
+                        box_visible=True,
+                        meanline_visible=True,
+                        points=False,
+                        showlegend=False,
+                    ))
+                    fig.update_layout(
+                        xaxis_title=time_variable,
+                        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+                        autosize=True,
                         margin=dict(l=50, r=20, t=40, b=40)
                     )
 
