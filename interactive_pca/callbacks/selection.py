@@ -73,6 +73,31 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
     def update_hover_detailed(hover_toggle):
         """Toggle detailed hover information."""
         return 'hover_detailed' in hover_toggle
+
+    @app.callback(
+        Output('selection-frozen', 'data'),
+        Output('freeze-selection-button', 'children'),
+        Output('freeze-selection-button', 'style'),
+        Input('freeze-selection-button', 'n_clicks'),
+        State('selection-frozen', 'data'),
+        prevent_initial_call=True,
+    )
+    def toggle_selection_freeze(_n, frozen):
+        """Lock/unlock the current selection. Every selection-store writer
+        below checks this and no-ops while frozen — the underlying
+        interaction (lasso, filter, time-slice...) still happens, it just
+        doesn't get written to the store, so nothing on screen changes."""
+        new_frozen = not frozen
+        label = 'Unfreeze' if new_frozen else 'Freeze'
+        style = {
+            'padding': '6px 12px',
+            'border': '1px solid #ccc',
+            'borderRadius': '4px',
+            'backgroundColor': '#cfe8ff' if new_frozen else '#ffffff',
+            'fontWeight': 'bold' if new_frozen else 'normal',
+            'cursor': 'pointer',
+        }
+        return new_frozen, label, style
     
     if show_annotation_table:
         @app.callback(
@@ -142,11 +167,14 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             State('pca-plot', 'figure'),
             State('pca-map-plot', 'figure'),
             State('time-histogram', 'figure'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def select_all_samples(n_clicks, pca_fig, map_fig, time_fig):
+        def select_all_samples(n_clicks, pca_fig, map_fig, time_fig, frozen):
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
+            if frozen:
+                return (dash.no_update,) * 6
             all_ids = df['id'].tolist()
             # Also turn off an active time-slice — otherwise its own sync
             # callback would just overwrite this reset the next time it fires.
@@ -162,11 +190,14 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Input('select-all-button', 'n_clicks'),
             State('pca-plot', 'figure'),
             State('pca-map-plot', 'figure'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def select_all_samples(n_clicks, pca_fig, map_fig):
+        def select_all_samples(n_clicks, pca_fig, map_fig, frozen):
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
+            if frozen:
+                return (dash.no_update,) * 4
             all_ids = df['id'].tolist()
             return all_ids, 'Reset', _apply_all_selected(pca_fig), _apply_all_selected(map_fig)
 
@@ -180,11 +211,14 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Input('select-all-button', 'n_clicks'),
             State('pca-plot', 'figure'),
             State('time-histogram', 'figure'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def select_all_samples(n_clicks, pca_fig, time_fig):
+        def select_all_samples(n_clicks, pca_fig, time_fig, frozen):
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
+            if frozen:
+                return (dash.no_update,) * 5
             all_ids = df['id'].tolist()
             return all_ids, 'Reset', False, _apply_all_selected(pca_fig), _apply_all_selected(time_fig)
 
@@ -195,11 +229,14 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Output('pca-plot', 'figure', allow_duplicate=True),
             Input('select-all-button', 'n_clicks'),
             State('pca-plot', 'figure'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def select_all_samples(n_clicks, pca_fig):
+        def select_all_samples(n_clicks, pca_fig, frozen):
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
+            if frozen:
+                return (dash.no_update,) * 3
             all_ids = df['id'].tolist()
             return all_ids, 'Reset', _apply_all_selected(pca_fig)
     
@@ -209,10 +246,13 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Output('selected-source', 'data', allow_duplicate=True),
             Output('pca-filter-error-message', 'children'),
             Input('pca-filter-query', 'value'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def filter_pca_table_and_sync_selection(query_string):
+        def filter_pca_table_and_sync_selection(query_string, frozen):
             """Filter samples based on pandas query and update selection."""
+            if frozen:
+                return dash.no_update, dash.no_update, dash.no_update
             if not query_string or query_string.strip() == '':
                 return df['id'].tolist(), 'Reset', ""
             try:
@@ -313,11 +353,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Output('selected-source', 'data', allow_duplicate=True),
             Input('pca-annotation-table', 'filterModel'),
             State('pca-annotation-table', 'virtualRowData'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def sync_table_filter_to_selection(filter_model, virtual_row_data):
+        def sync_table_filter_to_selection(filter_model, virtual_row_data, frozen):
             """Sync the table's column-filter result to selection-store and plots."""
-            if filter_model is None:
+            if frozen or filter_model is None:
                 return dash.no_update, dash.no_update
             if not filter_model:
                 # All filters cleared — restore full selection
@@ -335,11 +376,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             State('selection-store', 'data'),
             State('hidden-groups-store', 'data'),
             State('dropdown-group', 'value'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def table_status_to_stores(cell_change, selected_ids, hidden_store, group):
+        def table_status_to_stores(cell_change, selected_ids, hidden_store, group, frozen):
             """Apply Status dropdown change to selection-store and hidden-groups-store."""
-            if not cell_change or 'data' not in cell_change:
+            if frozen or not cell_change or 'data' not in cell_change:
                 return dash.no_update, dash.no_update, dash.no_update
             if cell_change.get('colId') != 'Status':
                 return dash.no_update, dash.no_update, dash.no_update
@@ -412,16 +454,17 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         Output('selection-store', 'data'),
         Output('selected-source', 'data', allow_duplicate=True),
         Input('pca-plot', 'selectedData'),
+        State('selection-frozen', 'data'),
         prevent_initial_call=True
     )
-    def pca_plot_to_selection_store(selected_data):
+    def pca_plot_to_selection_store(selected_data, frozen):
         """Convert lasso/box selection on PCA plot to IDs.
 
         Returns no_update when selectedData is null/empty so that programmatic
         figure updates (group change, aesthetics change) that reset selectedData
         do NOT clear the active selection.  Use the 'Select all' button to reset.
         """
-        if not selected_data or 'points' not in selected_data or not selected_data['points']:
+        if frozen or not selected_data or 'points' not in selected_data or not selected_data['points']:
             return dash.no_update, dash.no_update
         selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
         selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
@@ -434,11 +477,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Output('selection-store', 'data', allow_duplicate=True),
             Output('selected-source', 'data', allow_duplicate=True),
             Input('pca-map-plot', 'selectedData'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def map_plot_to_selection_store(selected_data):
+        def map_plot_to_selection_store(selected_data, frozen):
             """Convert lasso/box selection on map to IDs. Returns no_update on empty."""
-            if not selected_data or 'points' not in selected_data or not selected_data['points']:
+            if frozen or not selected_data or 'points' not in selected_data or not selected_data['points']:
                 return dash.no_update, dash.no_update
             selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
             selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
@@ -451,11 +495,12 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Output('selection-store', 'data', allow_duplicate=True),
             Output('selected-source', 'data', allow_duplicate=True),
             Input('time-histogram', 'selectedData'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def time_plot_to_selection_store(selected_data):
+        def time_plot_to_selection_store(selected_data, frozen):
             """Convert lasso/box selection on time plot to IDs. Returns no_update on empty."""
-            if not selected_data or 'points' not in selected_data or not selected_data['points']:
+            if frozen or not selected_data or 'points' not in selected_data or not selected_data['points']:
                 return dash.no_update, dash.no_update
             selected_ids = [str(pt.get('customdata')) for pt in selected_data['points']]
             selected_ids = [sid for sid in selected_ids if sid and sid != 'None']
@@ -579,9 +624,10 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             Input('time-window-size', 'value'),
             Input('time-window-range', 'value'),
             State('time-variable', 'value'),
+            State('selection-frozen', 'data'),
             prevent_initial_call=True
         )
-        def sync_time_window_to_selection(enabled, size, range_val, time_col):
+        def sync_time_window_to_selection(enabled, size, range_val, time_col, frozen):
             """The time-slice controls are just another selection source — like a
             lasso or the query filter, moving the window overrides whatever was
             selected before. Turning it off restores the full selection.
@@ -591,9 +637,15 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             result back into the slider. Dragging the slider (either handle, or
             the block between them to move both at once) just updates the size
             box to match, without feeding back into the slider itself.
+
+            While frozen, the slider/band still move normally (so the window
+            stays responsive) but the two selection outputs are held back, so
+            the frozen selection never gets overwritten.
             """
             if not enabled or time_col not in df.columns or not range_val:
-                return (df['id'].tolist(), 'Reset', {'enabled': False, 'lo': None, 'hi': None},
+                sel_out = dash.no_update if frozen else df['id'].tolist()
+                source_out = dash.no_update if frozen else 'Reset'
+                return (sel_out, source_out, {'enabled': False, 'lo': None, 'hi': None},
                         dash.no_update, dash.no_update, True, True, True, True, _TIME_WINDOW_ROW_HIDDEN)
             lo, hi = range_val
             range_output = dash.no_update
@@ -611,7 +663,9 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
                 # read as no selection at all. Use an id that can never match a
                 # real point instead, so every panel correctly dims everything.
                 ids = ['__time_window_empty__']
-            return (ids, 'time slice', {'enabled': True, 'lo': lo, 'hi': hi}, range_output, size,
+            sel_out = dash.no_update if frozen else ids
+            source_out = dash.no_update if frozen else 'time slice'
+            return (sel_out, source_out, {'enabled': True, 'lo': lo, 'hi': hi}, range_output, size,
                     False, False, False, False, _TIME_WINDOW_ROW_VISIBLE)
 
     # === Selection store to plot callbacks ===
