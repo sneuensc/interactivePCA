@@ -274,6 +274,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         dcc.Store(id='map-view-store', data=None),  # Current map view bbox, preserved across basemap toggle
         dcc.Store(id='time-window-store', data={'enabled': False, 'lo': None, 'hi': None}),  # Time-slice window bounds, for the shaded band on the time plot
+        dcc.Store(id='selection-frozen', data=False),  # While True, every selection-store writer becomes a no-op
         dcc.Store(id='map-fill-dummy', data=None),  # Dummy output for the geo pane-fill clientside callback
         # File-loader stores + browser modal (Restart and the tab loaders relaunch through these)
         *setup_stores(),
@@ -566,6 +567,19 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     }
                 ),
                 html.Button(
+                    'Freeze',
+                    id='freeze-selection-button',
+                    title='Lock the current selection — every other selection control '
+                          '(lasso, filters, time-slice, Reset) is ignored until unfrozen',
+                    style={
+                        'padding': '6px 12px',
+                        'border': '1px solid #ccc',
+                        'borderRadius': '4px',
+                        'backgroundColor': '#ffffff',
+                        'cursor': 'pointer'
+                    }
+                ),
+                html.Button(
                     'Save selection',
                     id='save-selection',
                     style={
@@ -768,12 +782,17 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         id='time-viz-mode',
                         options=[
                             {'label': 'Scatter', 'value': 'scatter'},
+                            {'label': 'Violin', 'value': 'violin'},
                             {'label': 'Distribution', 'value': 'distribution'},
                             {'label': 'Overlay', 'value': 'overlay'}
                         ],
                         value='scatter',
                         clearable=False,
                         style={'width': '160px', 'fontSize': '13px'}
+                    ),
+                    dbc.Checkbox(
+                        id='time-per-group-toggle', value=True, label='Per group',
+                        className='mx-3', style={'fontSize': '13px', 'whiteSpace': 'nowrap'},
                     ),
                     dbc.Checkbox(
                         id='time-window-enabled', value=False, label='Time slice',

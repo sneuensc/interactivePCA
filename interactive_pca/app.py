@@ -11,6 +11,7 @@ from dash import Input, Output
 
 from .data_loader import load_eigenvec, load_annotation, merge_data, resolve_annotation_columns
 from .plots import set_dataframe
+from .utils import resolve_id_pattern
 from .relaunch import schedule_relaunch
 from .callbacks.setup import register_setup_callbacks, _compose_argv
 from .layouts.setup import PRIMARY_ARGS
@@ -183,6 +184,23 @@ def create_app(args):
             invert_time=args.time_invert
         )
 
+        # Restrict which samples are loaded at all, if requested — unmatched
+        # IDs never enter df (not merely left unselected), so every panel,
+        # the PCA itself, and the table only ever see this subset.
+        if args.subsetID:
+            if os.path.isfile(args.subsetID):
+                with open(args.subsetID, 'r') as f:
+                    keep_ids = set(line.rstrip('\n') for line in f)
+            else:
+                # Each ";"- or ","-separated token is matched via fnmatch, so
+                # a plain ID (no wildcard chars) still keeps itself exactly,
+                # a pattern like "*.SG" expands to every matching sample, and
+                # a "!"-prefixed token (e.g. "!*.DG") excludes its matches.
+                keep_ids = resolve_id_pattern(args.subsetID, df['id'].tolist())
+            n_before = len(df)
+            df = df[df['id'].isin(keep_ids)].reset_index(drop=True)
+            logging.info(f"Restricted to {len(df)} of {n_before} samples via --subsetID.")
+
         # Set global DataFrame in plots module
         set_dataframe(df)
 
@@ -209,12 +227,14 @@ def create_app(args):
             if os.path.isfile(args.selectedID):
                 with open(args.selectedID, 'r') as f:
                     init_selected_ids = [line.rstrip('\n') for line in f]
+                valid_ids = set(df['id'].tolist())
+                init_selected_ids = [sid for sid in init_selected_ids if sid in valid_ids]
             else:
-                init_selected_ids = args.selectedID.split(";")
-
-            # Filter to valid IDs
-            valid_ids = set(df['id'].tolist())
-            init_selected_ids = [sid for sid in init_selected_ids if sid in valid_ids]
+                # Each ";"- or ","-separated token is matched via fnmatch, so
+                # a plain ID (no wildcard chars) still selects itself exactly,
+                # a pattern like "*.SG" expands to every matching sample, and
+                # a "!"-prefixed token (e.g. "!*.DG") excludes its matches.
+                init_selected_ids = list(resolve_id_pattern(args.selectedID, df['id'].tolist()))
         else:
             init_selected_ids = df['id'].tolist()
 

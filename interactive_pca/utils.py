@@ -6,8 +6,37 @@ import re
 import json
 import math
 import difflib
+import fnmatch
 from collections import defaultdict
 import pandas as pd
+
+
+def split_id_tokens(text):
+    """Split a ";"- or ","-separated list of IDs/patterns, trimming whitespace
+    around each token (so "*.AG, *.SG" and "*.AG;*.SG" both work).
+    """
+    return [t.strip() for t in re.split(r'[;,]', text) if t.strip()]
+
+
+def resolve_id_pattern(pattern_str, all_ids):
+    """Resolve a comma/semicolon-separated list of fnmatch-style ID patterns
+    against all_ids. A token prefixed with "!" excludes its matches instead
+    of including them (e.g. "!*.DG" drops *.DG samples); if only "!" tokens
+    are given, the base set is everyone (so "!*.DG" alone means "all but
+    *.DG", no need to also spell out a catch-all "*").
+    """
+    tokens = split_id_tokens(pattern_str)
+    includes = [t for t in tokens if not t.startswith('!')]
+    excludes = [t[1:] for t in tokens if t.startswith('!') and t[1:]]
+    if includes:
+        keep = set()
+        for tok in includes:
+            keep.update(fnmatch.filter(all_ids, tok))
+    else:
+        keep = set(all_ids)
+    for tok in excludes:
+        keep.difference_update(fnmatch.filter(all_ids, tok))
+    return keep
 
 
 def nice_step(x):

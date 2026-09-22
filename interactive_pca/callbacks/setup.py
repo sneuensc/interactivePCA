@@ -18,6 +18,7 @@ from dash import Input, Output, State, ALL, ctx, html, no_update
 
 from ..args import create_parser
 from ..data_loader import auto_detect_dimensions, detect_eigenvec_sep, find_incrementing_prefix_series
+from ..utils import split_id_tokens
 from ..relaunch import schedule_relaunch, POLLER_JS
 from ..layouts.setup import (
     ANNOTATION_DEPENDENT, EIGENVEC_FIELDS, ANNOTATION_FIELDS,
@@ -136,10 +137,12 @@ def _relaunch_from(args, dom_values, overlay_names):
     for name, value in dom_values.items():
         if name in allowed:
             merged[name] = value
-    # "Selected IDs" is a multi-select list; the CLI wants ";"-joined IDs.
-    selected = merged.get('selectedID')
-    if isinstance(selected, list):
-        merged['selectedID'] = ';'.join(map(str, selected)) if selected else None
+    # "Selected IDs" / "Load only IDs" are multi-select lists in List mode;
+    # the CLI wants ";"-joined IDs (Pattern mode already hands over a string).
+    for dest in ('selectedID', 'subsetID'):
+        value = merged.get(dest)
+        if isinstance(value, list):
+            merged[dest] = ';'.join(map(str, value)) if value else None
 
     # Load/Apply always move forward out of the loader shell. Only the
     # header's Restart button (app.py:_restart) composes --setup deliberately;
@@ -301,8 +304,14 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
                     # Dimensions start later, assume first column is ID
                     id_col = cols[0]
             else:
-                # No dimensions detected, use first column as ID
-                id_col = cols[0]
+                # No dimensions detected — nothing to load, and Load would
+                # otherwise relaunch straight into load_eigenvec's own
+                # "need at least 2 dimension columns" crash. Stop here instead.
+                return no_update, no_update, no_update, dbc.Alert(
+                    f"No dimension columns found in '{path}' — expected columns "
+                    "like PC1, PC2, ... with consecutive numbering starting at 1. "
+                    "Provide 'Dimension columns' explicitly, or check the file.",
+                    color='danger'), {'display': 'none'}, no_update
 
             # Count annotation columns (all columns that aren't ID or dimensions)
             dim_set = set(guessed_dims)
@@ -328,24 +337,49 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
         @app.callback(
             Output({'type': 'setup-arg', 'name': 'selectedID'}, 'options'),
             Output({'type': 'setup-arg', 'name': 'selectedID'}, 'placeholder'),
+            Output({'type': 'setup-arg', 'name': 'subsetID'}, 'options'),
+            Output({'type': 'setup-arg', 'name': 'subsetID'}, 'placeholder'),
             Input({'type': 'setup-arg', 'name': 'eigenvecID'}, 'value'),
             State({'type': 'setup-arg', 'name': 'eigenvec'}, 'value'),
             prevent_initial_call=True,
         )
         def refresh_selected_ids(id_col, path):
             if not id_col or not path or not os.path.isfile(path):
-                return no_update, no_update
+                return no_update, no_update, no_update, no_update
             try:
                 values = pd.read_csv(path, sep=detect_eigenvec_sep(path), usecols=[id_col])[id_col]
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Could not read sample IDs: %s", exc)
-                return no_update, no_update
+                return no_update, no_update, no_update, no_update
             seen, unique = set(), []
             for value in values.astype(str):
                 if value not in seen:
                     seen.add(value)
                     unique.append(value)
-            return [{'label': v, 'value': v} for v in unique], 'all samples'
+            options = [{'label': v, 'value': v} for v in unique]
+            return options, 'all samples', options, 'load all samples'
+
+        @app.callback(
+            Output('subsetid-list-wrap', 'style'),
+            Output('subsetid-pattern-wrap', 'style'),
+            Input('subsetid-mode', 'value'),
+            prevent_initial_call=True,
+        )
+        def toggle_subset_id_mode(mode):
+            if mode == 'pattern':
+                return {'display': 'none'}, {}
+            return {}, {'display': 'none'}
+
+        @app.callback(
+            Output('selectedid-list-wrap', 'style'),
+            Output('selectedid-pattern-wrap', 'style'),
+            Input('selectedid-mode', 'value'),
+            prevent_initial_call=True,
+        )
+        def toggle_selected_id_mode(mode):
+            if mode == 'pattern':
+                return {'display': 'none'}, {}
+            return {}, {'display': 'none'}
 
         @app.callback(
             Output('relaunch-store', 'data', allow_duplicate=True),
@@ -353,11 +387,20 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             Input('pca-load-btn', 'n_clicks'),
             State({'type': 'setup-arg', 'name': ALL}, 'value'),
             State({'type': 'setup-arg', 'name': ALL}, 'id'),
+            State('subsetid-mode', 'value'),
+            State('subsetid-pattern', 'value'),
+            State('selectedid-mode', 'value'),
+            State('selectedid-pattern', 'value'),
             *_SETTINGS_STATE,
             prevent_initial_call=True,
         )
-        def pca_load(_n, values, ids, set_values, set_ids):
+        def pca_load(_n, values, ids, sub_mode, sub_pattern, sel_mode, sel_pattern,
+                     set_values, set_ids):
             dom = {**_dom(set_values, set_ids), **_dom(values, ids)}
+            if sub_mode == 'pattern':
+                dom['subsetID'] = ';'.join(split_id_tokens(sub_pattern)) if sub_pattern else None
+            if sel_mode == 'pattern':
+                dom['selectedID'] = ';'.join(split_id_tokens(sel_pattern)) if sel_pattern else None
             eigenvec = dom.get('eigenvec')
             if not eigenvec or not str(eigenvec).strip():
                 return no_update, dbc.Alert('The eigenvec file is required.', color='danger')
