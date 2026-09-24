@@ -14,7 +14,7 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import html, dcc
 
-from ..utils import strip_ansi, dict_of_dicts_to_tuple, nice_step, nice_bounds
+from ..utils import strip_ansi, dict_of_dicts_to_tuple, nice_step, nice_bounds, get_abbr_of
 from ..plots import (
     generate_fig_scatter2d, generate_fig_scatter3d,
     create_geographical_map, generate_map_fig_scattergeo,
@@ -39,7 +39,8 @@ def create_layout(args, df, pcs,
                  annotation_desc, ANNOTATION_TIME, ANNOTATION_LAT, ANNOTATION_LONG,
                  init_selected_ids, init_group, init_continuous, init_aesthetics,
                  dropdown_group_list, dropdown_list_continuous,
-                 dropdown_group_symbol_list=None, has_embedded_annotation_cols=False):
+                 dropdown_group_symbol_list=None, has_embedded_annotation_cols=False,
+                 init_session=None):
     """
     Create the main application layout.
     
@@ -57,7 +58,9 @@ def create_layout(args, df, pcs,
         init_aesthetics: Initial aesthetic settings
         dropdown_group_list: List of grouping options
         dropdown_list_continuous: List of continuous variables
-    
+        init_session: Saved view (--session) to apply once the page loads,
+            or None
+
     Returns:
         Dict with 'layout' and 'tab_content_map' keys
     """
@@ -82,9 +85,17 @@ def create_layout(args, df, pcs,
     # Include PCs as continuous variables
     continuous_columns.extend([pc for pc in pcs if pc not in continuous_columns])
 
-    # Initial "Shape by" grouping from --group-shape (mirrors --group handling).
+    # Initial "Shape by" grouping from --group-shape (mirrors --group handling
+    # in app.py — same raw-name-vs-abbreviation resolution, same reason).
     init_group_symbol = getattr(args, 'group_shape', None)
-    if not init_group_symbol or init_group_symbol not in (dropdown_group_symbol_list or []):
+    _group_symbol_options = dropdown_group_symbol_list or []
+    if (init_group_symbol and init_group_symbol not in _group_symbol_options
+            and annotation_desc is not None):
+        init_group_symbol = get_abbr_of(
+            init_group_symbol, annotation_desc['Description'].tolist(),
+            annotation_desc['Abbreviation'].tolist()
+        )
+    if not init_group_symbol or init_group_symbol not in _group_symbol_options:
         init_group_symbol = 'none'
 
     # PCA tab (always present): the plots, or the eigenvec loader if no data yet.
@@ -275,12 +286,18 @@ def create_layout(args, df, pcs,
         dcc.Store(id='map-view-store', data=None),  # Current map view bbox, preserved across basemap toggle
         dcc.Store(id='time-window-store', data={'enabled': False, 'lo': None, 'hi': None}),  # Time-slice window bounds, for the shaded band on the time plot
         dcc.Store(id='selection-frozen', data=False),  # While True, every selection-store writer becomes a no-op
+        dcc.Store(id='session-init-store', data=init_session),  # Saved --session view, applied once on load
+        dcc.Store(id='session-restore-dummy', data=None),  # Dummy output for the session-restore clientside callback
+        dcc.Store(id='pca-view-store', data=None),  # Current PCA plot zoom/pan/camera (relayoutData), for Save view
+        dcc.Store(id='time-view-store', data=None),  # Current time plot zoom/pan (relayoutData), for Save view
+        dcc.Store(id='pane-sizes-store', data={}),  # Draggable pane split percentages, keyed by resizer id
         dcc.Store(id='map-fill-dummy', data=None),  # Dummy output for the geo pane-fill clientside callback
         # File-loader stores + browser modal (Restart and the tab loaders relaunch through these)
         *setup_stores(),
         file_browser_modal(),
         dcc.Download(id='download-snapshot'),
-        
+        dcc.Download(id='download-session'),
+
         # Header with tabs
         html.Div([
             html.Img(
@@ -333,6 +350,25 @@ def create_layout(args, df, pcs,
                 'Export snapshot',
                 id='export-snapshot-btn',
                 title='Save current figures as a standalone HTML file',
+                style={
+                    'float': 'right', 'marginRight': '8px', 'marginTop': '14px',
+                    'padding': '6px 12px', 'fontSize': '14px',
+                    'border': '1px solid #0066cc',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#e8f0fe',
+                    'color': '#0066cc',
+                    'cursor': 'pointer'
+                }
+            ),
+            html.Button(
+                'Save view',
+                id='save-view-btn',
+                title="Save everything needed to reopen this exact run — eigenvec/"
+                      "annotation/settings plus selection, grouping, aesthetics, "
+                      "axes, map, time-plot and panel sizes — to a timestamped "
+                      "session_<date>_<time>.json, downloaded via the browser "
+                      "(so you pick where it lands) and also kept server-side "
+                      "for --session/the eigenvec tab's 'Load session'.",
                 style={
                     'float': 'right', 'marginRight': '8px', 'marginTop': '14px',
                     'padding': '6px 12px', 'fontSize': '14px',
