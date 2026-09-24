@@ -3,6 +3,9 @@ Command-line argument parser configuration.
 """
 
 import argparse
+import json
+import logging
+import os
 from .utils import is_notebook
 
 
@@ -103,6 +106,14 @@ def create_parser(script_name='Script'):
     # Aesthetics
     parser.add_argument('--aesthetics-file', type=str, default=None, metavar="FILE",
                        help='Json file with stored aesthetics (default none)')
+    parser.add_argument('--session', type=str, default=None, metavar="FILE",
+                       help="Json file with a saved run: the full CLI args (eigenvec, "
+                            "annotation, every setting) plus the view (selection, "
+                            "grouping, aesthetics, axes, map, time-plot, panel sizes) — "
+                            "reopens showing exactly that, on its own with no other flag "
+                            "needed (an arg also passed on this command line still wins "
+                            "over the saved one). Created by the app's own 'Save view' "
+                            "button (default none)")
     parser.add_argument('--color-schema-continuous', type=str, default='Viridis', metavar="NAME",
                        help='Color schema for continuous variables (default Viridis)')
     parser.add_argument('--point-color', type=str, default="#000000", metavar="COLOR",
@@ -150,6 +161,42 @@ def create_parser(script_name='Script'):
     return parser
 
 
+# Internal/self-referential dests never pulled from a --session file's own
+# saved args (mirrors layouts.setup._INTERNAL_ARGS, duplicated here to avoid
+# a circular import — that module imports from this one).
+_SESSION_ARGS_EXCLUDE = {'session', 'setup', 'ignore_embedded_annotation'}
+
+
+def _merge_session_args(parsed_args, parser):
+    """Fill in any CLI arg not explicitly set on this command line from a
+    --session file's own saved args (callbacks/session.py:save_view embeds
+    the full CLI args alongside the view), so --session alone — no separate
+    --eigenvec/--annotation/etc. — can fully reproduce a saved run. An arg
+    actually passed on this command line always wins over the saved one.
+    """
+    if not parsed_args.session or not os.path.isfile(parsed_args.session):
+        return parsed_args
+    try:
+        with open(parsed_args.session, 'r') as f:
+            session_data = json.load(f)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Could not read session file '%s': %s", parsed_args.session, exc)
+        return parsed_args
+
+    saved_args = session_data.get('args') or {}
+    defaults = {a.dest: a.default for a in parser._actions if a.option_strings}
+    for dest, value in saved_args.items():
+        if dest in _SESSION_ARGS_EXCLUDE or not hasattr(parsed_args, dest):
+            continue
+        # "Still at the parser's default" is the same heuristic already used
+        # to detect explicit-vs-default fields when composing relaunch argv
+        # (callbacks/setup.py:_compose_argv) — a false positive only if the
+        # user happens to explicitly pass a flag equal to its own default.
+        if getattr(parsed_args, dest) == defaults.get(dest):
+            setattr(parsed_args, dest, value)
+    return parsed_args
+
+
 def parse_args(args=None, dev_mode=False):
     """
     Parse command-line arguments.
@@ -170,5 +217,7 @@ def parse_args(args=None, dev_mode=False):
         parsed_args = parser.parse_args([])
     else:
         parsed_args = parser.parse_args(args)
+
+    parsed_args = _merge_session_args(parsed_args, parser)
 
     return parsed_args

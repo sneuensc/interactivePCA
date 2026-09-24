@@ -22,7 +22,7 @@ from ..args import create_parser, float_0_1
 
 
 # Field groupings by CLI dest.
-EIGENVEC_FIELDS = ['eigenvec', 'dim', 'eigenvecID', 'selectedID', 'subsetID']
+EIGENVEC_FIELDS = ['eigenvec', 'dim', 'eigenvecID', 'selectedID', 'subsetID', 'session']
 ANNOTATION_DEPENDENT = ['annotationID', 'latitude', 'longitude', 'time', 'group', 'group_shape']
 ANNOTATION_FIELDS = ['annotation', 'merge_embedded_annotation'] + ANNOTATION_DEPENDENT
 PRIMARY_ARGS = EIGENVEC_FIELDS + ANNOTATION_FIELDS
@@ -200,7 +200,8 @@ def eigenvec_loader_panel(args):
     return dbc.Container(
         [
             html.H4('Load eigenvec data', className='mt-3'),
-            html.P('Point at a PLINK eigenvec file to start the PCA.',
+            html.P('Point at a PLINK eigenvec file to start the PCA — or, further '
+                  'below, load a previously saved session instead.',
                    className='text-muted'),
             _file_row('Eigenvec file *', args, by['eigenvec'], 'browse-eigenvec',
                       'Type a server-side path, or Browse.'),
@@ -225,6 +226,18 @@ def eigenvec_loader_panel(args):
                 id='eigenvec-details',
                 style=_details_style(args, 'eigenvec'),
             ),
+            html.Hr(className='mt-4'),
+            html.H5('Or load a saved session', className='mt-3'),
+            html.P('A session.json saved via the app\'s "Save view" button carries '
+                  'its own eigenvec/annotation/settings and view (selection, '
+                  'grouping, aesthetics, axes, map, time-plot, panel sizes) — '
+                  'loading it reopens exactly that, no other field needed above.',
+                   className='text-muted'),
+            _file_row('Session file', args, by['session'], 'browse-session',
+                      'Type a server-side path, or Browse.'),
+            html.Div(dbc.Button('Load session', id='load-session-btn', color='secondary',
+                                n_clicks=0), className='my-2'),
+            html.Div(id='session-load-status', className='mb-2'),
         ],
         style={'maxWidth': '760px'},
     )

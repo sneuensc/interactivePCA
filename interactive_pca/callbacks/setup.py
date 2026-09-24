@@ -179,13 +179,19 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
     # a missing Browse button would silently break the whole callback.
     if show_browse:
         targets = ([n for n, s in (('eigenvec', show_eigenvec_loader),
+                                    ('session', show_eigenvec_loader),
                                     ('annotation', show_annotation_loader)) if s])
 
         open_inputs = [Input('file-modal-cancel', 'n_clicks')]
+        trigger_to_target = {}
         if show_eigenvec_loader:
             open_inputs.append(Input('browse-eigenvec', 'n_clicks'))
+            trigger_to_target['browse-eigenvec'] = 'eigenvec'
+            open_inputs.append(Input('browse-session', 'n_clicks'))
+            trigger_to_target['browse-session'] = 'session'
         if show_annotation_loader:
             open_inputs.append(Input('browse-annotation', 'n_clicks'))
+            trigger_to_target['browse-annotation'] = 'annotation'
         open_states = [State({'type': 'setup-arg', 'name': n}, 'value') for n in targets]
 
         @app.callback(
@@ -200,7 +206,7 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
         def open_modal(*vals):
             if ctx.triggered_id == 'file-modal-cancel':
                 return False, no_update, no_update, no_update
-            target = 'eigenvec' if ctx.triggered_id == 'browse-eigenvec' else 'annotation'
+            target = trigger_to_target.get(ctx.triggered_id, 'annotation')
             state_vals = dict(zip(targets, vals[len(open_inputs):]))
             current = state_vals.get(target)
             start = os.path.dirname(os.path.abspath(current)) if current else os.getcwd()
@@ -412,6 +418,25 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             dom['ignore_embedded_annotation'] = True
             overlay = EIGENVEC_FIELDS + settings_arg_names() + ['ignore_embedded_annotation']
             port = _relaunch_from(args, dom, overlay)
+            return {'go': True, 'port': port}, _starting_alert()
+
+        @app.callback(
+            Output('relaunch-store', 'data', allow_duplicate=True),
+            Output('session-load-status', 'children'),
+            Input('load-session-btn', 'n_clicks'),
+            State({'type': 'setup-arg', 'name': 'session'}, 'value'),
+            prevent_initial_call=True,
+        )
+        def load_session_direct(_n, session_path):
+            """Relaunch from a session file alone — its own embedded args
+            (see callbacks/session.py:save_view) supply eigenvec/annotation/
+            everything else, so no other field on this tab is needed."""
+            if not session_path or not str(session_path).strip():
+                return no_update, dbc.Alert('Enter a session file path.', color='warning')
+            if not os.path.isfile(session_path):
+                return no_update, dbc.Alert(f"Session file not found: {session_path}",
+                                            color='danger')
+            port = _relaunch_from(args, {'session': session_path}, ['session'])
             return {'go': True, 'port': port}, _starting_alert()
 
     # ── Annotation loader (Annotation tab) ───────────────────────────────────
