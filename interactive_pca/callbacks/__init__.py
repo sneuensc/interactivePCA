@@ -10,6 +10,7 @@ from .aesthetics import register_aesthetics_callbacks
 from .hover_sync import register_hover_sync_callbacks
 from .hover_details import register_hover_details_callback
 from .legend_sync import register_legend_sync_callbacks
+from .session import register_session_callbacks
 
 
 def register_all_callbacks(app, args, df, pcs, annotation_desc,
@@ -71,6 +72,13 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
         app,
         show_map_plot=show_map_plot,
         show_time_plot=show_time_plot,
+    )
+    register_session_callbacks(
+        app,
+        args,
+        show_map_plot=show_map_plot,
+        show_time_plot=show_time_plot,
+        show_annotation_table=show_annotation_table,
     )
     if show_annotation_table:
         register_hover_details_callback(

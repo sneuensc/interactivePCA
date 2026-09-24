@@ -2,6 +2,7 @@
 Main Dash application factory for interactivePCA.
 """
 
+import json
 import logging
 import os
 import pandas as pd
@@ -56,6 +57,7 @@ def create_app(args):
         init_continuous = None
         init_aesthetics = {}
         has_embedded_annotation_cols = False
+        init_session = None
     else:
         logging.info("Loading data files...")
 
@@ -261,7 +263,22 @@ def create_app(args):
             if pc not in dropdown_group_list:
                 dropdown_group_list.append(pc)
 
-        init_group = args.group if args.group and args.group in dropdown_group_list else dropdown_group_list[0]
+        # --group may be given as the raw annotation column name (as picked in
+        # the GUI's "Group / colour column" dropdown, or typed on the CLI) or
+        # already as its abbreviated working name. Every other annotation
+        # field (--latitude/--longitude/--time/--annotationID) is resolved
+        # raw-name-to-abbreviation via get_abbr_of (data_loader.
+        # resolve_annotation_columns) — --group wasn't, so a column long
+        # enough to get abbreviated (e.g. "Archeological Culture" ->
+        # "Archeological_C") silently fell back to no grouping at all.
+        resolved_group = args.group
+        if resolved_group and resolved_group not in dropdown_group_list and annotation_desc is not None:
+            from .utils import get_abbr_of
+            resolved_group = get_abbr_of(
+                args.group, annotation_desc['Description'].tolist(),
+                annotation_desc['Abbreviation'].tolist()
+            )
+        init_group = resolved_group if resolved_group and resolved_group in dropdown_group_list else dropdown_group_list[0]
 
         # Initialize continuous variable options
         dropdown_list_continuous = []
@@ -283,7 +300,22 @@ def create_app(args):
             if file_aesthetics and init_group in file_aesthetics:
                 # Merge file aesthetics with parameter-based defaults
                 init_aesthetics = merge_aesthetics(init_aesthetics, file_aesthetics[init_group])
-    
+
+        # Load a saved view (--session), applied client-side once the page
+        # loads (see callbacks/session.py:apply_saved_session) rather than
+        # threaded through the layout, so it can override any field without
+        # every layout function needing a new parameter for it.
+        init_session = None
+        if args.session:
+            if os.path.isfile(args.session):
+                try:
+                    with open(args.session, 'r') as f:
+                        init_session = json.load(f)
+                except Exception as exc:  # noqa: BLE001
+                    logging.warning("Could not read session file '%s': %s", args.session, exc)
+            else:
+                logging.warning("Session file not found: %s", args.session)
+
     # Create Dash app
     app = dash.Dash(
         __name__,
@@ -298,7 +330,8 @@ def create_app(args):
         init_selected_ids, init_group, init_continuous, init_aesthetics,
         dropdown_group_list, dropdown_list_continuous,
         dropdown_group_symbol_list=dropdown_group_symbol_list,
-        has_embedded_annotation_cols=has_embedded_annotation_cols
+        has_embedded_annotation_cols=has_embedded_annotation_cols,
+        init_session=init_session,
     )
     app.layout = layout_data['layout']
     tab_content_map = layout_data['tab_content_map']
@@ -346,14 +379,27 @@ def create_app(args):
                         if (resizerIndex > 0 && resizerIndex < children.length - 1) {
                             const before = children[resizerIndex - 1];
                             const after = children[resizerIndex + 1];
-                            
+                            let lastBeforePercent = null;
+
+                            function persistSize() {
+                                // Remember the final split so "Save view" can
+                                // capture it — only on release, not per pixel.
+                                if (lastBeforePercent == null) return;
+                                if (!(window.dash_clientside && window.dash_clientside.set_props)) return;
+                                window._paneSizes = window._paneSizes || {};
+                                window._paneSizes[resizer.id] = lastBeforePercent;
+                                window.dash_clientside.set_props(
+                                    'pane-sizes-store', {data: Object.assign({}, window._paneSizes)}
+                                );
+                            }
+
                             if (isVertical) {
                                 // Handle vertical resizer (width-based)
                                 let startX = e.clientX;
                                 let startWidth = before.offsetWidth;
                                 const containerWidth = container.offsetWidth;
                                 const resizerWidth = 8;
-                                
+
                                 function handleMouseMove(moveEvent) {
                                     const deltaX = moveEvent.clientX - startX;
                                     const newWidth = startWidth + deltaX;
@@ -363,16 +409,18 @@ def create_app(args):
                                     const beforePx = Math.max(minSize, Math.min(availableWidth - minSize, newWidth));
                                     const beforePercent = (beforePx / availableWidth) * 100;
                                     const afterPercent = 100 - beforePercent;
-                                    
+                                    lastBeforePercent = beforePercent;
+
                                     before.style.flex = `0 0 ${beforePercent}%`;
                                     after.style.flex = `0 0 ${afterPercent}%`;
                                 }
-                                
+
                                 function handleMouseUp() {
                                     document.removeEventListener('mousemove', handleMouseMove);
                                     document.removeEventListener('mouseup', handleMouseUp);
+                                    persistSize();
                                 }
-                                
+
                                 document.addEventListener('mousemove', handleMouseMove);
                                 document.addEventListener('mouseup', handleMouseUp);
                             } else {
@@ -381,7 +429,7 @@ def create_app(args):
                                 let startHeight = before.offsetHeight;
                                 const containerHeight = container.offsetHeight;
                                 const resizerHeight = 8;
-                                
+
                                 function handleMouseMove(moveEvent) {
                                     const deltaY = moveEvent.clientY - startY;
                                     const newHeight = startHeight + deltaY;
@@ -391,16 +439,18 @@ def create_app(args):
                                     const beforePx = Math.max(minSize, Math.min(availableHeight - minSize, newHeight));
                                     const beforePercent = (beforePx / availableHeight) * 100;
                                     const afterPercent = 100 - beforePercent;
-                                    
+                                    lastBeforePercent = beforePercent;
+
                                     before.style.flex = `0 0 ${beforePercent}%`;
                                     after.style.flex = `0 0 ${afterPercent}%`;
                                 }
-                                
+
                                 function handleMouseUp() {
                                     document.removeEventListener('mousemove', handleMouseMove);
                                     document.removeEventListener('mouseup', handleMouseUp);
+                                    persistSize();
                                 }
-                                
+
                                 document.addEventListener('mousemove', handleMouseMove);
                                 document.addEventListener('mouseup', handleMouseUp);
                             }
