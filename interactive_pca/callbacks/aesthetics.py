@@ -85,19 +85,23 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
         annotation_desc: Annotation description DataFrame
     """
     
-    # Callback to open aesthetics modal
+    # Callback to open aesthetics panel — visibility lives in className (see
+    # assets/draggable_panel.css), not `style`, so the panel's own drag
+    # handler (app.py) can freely own style.left/style.top without this
+    # callback ever fighting it.
     @app.callback(
-        Output('aesthetics-modal', 'is_open'),
-        [Input('open-aesthetics', 'n_clicks'), Input('cancel-aesthetics', 'n_clicks'), Input('save-aesthetics', 'n_clicks')],
-        [State('aesthetics-modal', 'is_open')],
+        Output('aesthetics-modal', 'className'),
+        [Input('open-aesthetics', 'n_clicks'), Input('cancel-aesthetics', 'n_clicks'),
+         Input('save-aesthetics', 'n_clicks'), Input('aesthetics-modal-close-x', 'n_clicks')],
+        [State('aesthetics-modal', 'className')],
         prevent_initial_call=True
     )
-    def toggle_aesthetics_modal(n_open, n_cancel, n_save, is_open):
-        """Toggle modal on open, cancel, or after save"""
-        #print(f"toggle_aesthetics_modal called with n_open={n_open}, n_cancel={n_cancel}, n_save={n_save}, is_open={is_open}")
-        if n_open or n_cancel or n_save:
-            return not is_open
-        return is_open
+    def toggle_aesthetics_modal(n_open, n_cancel, n_save, n_close, class_name):
+        """Toggle panel on open, cancel, close (x), or after save"""
+        if n_open or n_cancel or n_save or n_close:
+            is_open = bool(class_name and 'panel-open' in class_name)
+            return 'draggable-panel' if is_open else 'draggable-panel panel-open'
+        return class_name
     
     # Keep symbol-aesthetics-store populated when the shape dropdown changes
     _SYMBOLS = ['circle', 'square', 'diamond', 'cross', 'triangle-up', 'triangle-down', 'star']
