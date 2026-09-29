@@ -1,0 +1,14 @@
+/* Visibility for .draggable-panel components (e.g. the aesthetics editor,
+   layouts/__init__.py) is toggled via className (.panel-open), never via the
+   inline `style` prop that Dash owns — the panel's own drag handler
+   (app.py's clientside drag-init callback) sets style.left/style.top
+   directly on the DOM node, and a later Dash-driven `style` update would
+   clobber that positioning. Keeping visibility out of `style` entirely
+   avoids the conflict. */
+.draggable-panel {
+    display: none;
+}
+
+.draggable-panel.panel-open {
+    display: flex;
+}

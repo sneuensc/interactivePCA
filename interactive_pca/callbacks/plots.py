@@ -431,14 +431,19 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('save-trigger-store', 'data'),
             Input('time-window-store', 'data'),
             Input('time-invert-toggle', 'value'),
-            Input('time-per-group-toggle', 'value'),
+            Input('time-group-mode', 'value'),
+            Input('time-bin-size', 'value'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             prevent_initial_call=False
         )
         def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store,
                                    group_symbol, symbol_store, _save_tick, time_window, invert_axis,
-                                   per_group, hover_detailed, selected_cols):
+                                   group_mode, bin_size, hover_detailed, selected_cols):
+            # 'No group' / 'Group' / 'Group with name' (Scatter/Violin only —
+            # Distribution/Overlay never split or label by group).
+            per_group = group_mode != 'none'
+            show_group_names = group_mode == 'group_named'
             if time_variable is None or time_variable not in df.columns:
                 return {}
 
@@ -468,12 +473,17 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             # unselected.marker only accepts color/opacity/size — no 'line'
             _unsel_mk_dict  = dict(color=unsel_color, opacity=unsel_opacity, size=unsel_size)
             _unsel_marker   = dict(marker=_unsel_mk_dict)
+            # Bin WIDTH (not count) drives Distribution/Overlay — 'Bin size' box
+            # above the plot, defaulting to ~50 bins across the range (see
+            # default_bin_size in layouts/__init__.py). Falls back to a fixed
+            # bin count if left empty/invalid.
+            _hist_kwargs = {'xbins': dict(size=bin_size)} if bin_size and bin_size > 0 else {'nbinsx': 50}
 
             if viz_mode == 'distribution':
                 # Simple histogram
                 fig.add_trace(go.Histogram(
                     x=time_vals,
-                    nbinsx=50,
+                    **_hist_kwargs,
                     marker=dict(color=default_color),
                     name='All samples',
                     showlegend=False
@@ -491,7 +501,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 default_opacity = aesthetics['opacity'].get('default', 0.7)
                 _cat_strip = False   # whether we drew per-group y-bands
 
-                if per_group and group != 'none' and group in df.columns:
+                if group != 'none' and group in df.columns:
                     group_vals = df.loc[time_vals.index, group]
                     if df[group].dtype.kind in 'fi':
                         # Continuous variable — single strip with colorscale
@@ -522,8 +532,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             name='All samples',
                             showlegend=False
                         ))
-                    else:
-                        # Categorical variable — one horizontal strip per group
+                    elif per_group:
+                        # Categorical variable, "Per group" on — one horizontal strip per group
                         _cat_strip = True
                         color_map = aesthetics.get('color', {})
                         size_map = aesthetics.get('size', {})
@@ -566,6 +576,30 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                                 name=str(val),
                                 showlegend=False
                             ))
+                    else:
+                        # Categorical variable, "Per group" off — keep one
+                        # combined strip (no per-group row separation) but
+                        # still color each point by its own group, same as
+                        # the PCA/map plots always do regardless of this toggle.
+                        jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
+                        color_map = aesthetics.get('color', {})
+                        point_colors = [color_map.get(str(v), default_color) for v in group_vals]
+                        _grp_mk = dict(color=point_colors, size=default_size, opacity=default_opacity)
+                        if gs and sym_aest and gs in df.columns:
+                            _grp_mk['symbol'] = [sym_aest.get(str(v), sym_aest.get('default', 'circle'))
+                                                 for v in df.loc[time_vals.index, gs]]
+                        fig.add_trace(go.Scatter(
+                            x=time_vals,
+                            y=jitter,
+                            mode='markers',
+                            marker=_grp_mk,
+                            unselected=_unsel_marker,
+                            customdata=time_ids,
+                            text=[str(v) for v in group_vals],
+                            hovertemplate='<b>Group:</b> %{text}<br><b>ID:</b> %{customdata}<br><extra></extra>',
+                            name='All samples',
+                            showlegend=False
+                        ))
                 else:
                     # No grouping — single strip (per-point symbols from shape group if active)
                     jitter = np.random.uniform(-0.3, 0.3, size=len(time_vals))
@@ -598,7 +632,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             range=[-0.5, n_groups - 0.5],
                             showgrid=True,
                             zeroline=False,
-                            showticklabels=False,
+                            showticklabels=bool(show_group_names),
                         ),
                         showlegend=False,
                         autosize=True,
@@ -646,7 +680,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         ))
                     fig.update_layout(
                         xaxis_title=time_variable,
-                        yaxis=dict(showgrid=True, zeroline=False),
+                        yaxis=dict(showgrid=True, zeroline=False, showticklabels=bool(show_group_names)),
                         showlegend=False,
                         autosize=True,
                         margin=dict(l=80, r=20, t=40, b=40),
@@ -676,7 +710,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 # Overlapping histograms: all vs selected
                 fig.add_trace(go.Histogram(
                     x=time_vals,
-                    nbinsx=50,
+                    **_hist_kwargs,
                     marker_color='lightgray',
                     opacity=0.6,
                     name='All',
@@ -693,7 +727,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     if not selected_time.empty:
                         fig.add_trace(go.Histogram(
                             x=selected_time,
-                            nbinsx=50,
+                            **_hist_kwargs,
                             marker_color='#1F77B4',
                             opacity=0.9,
                             name='Selected',
@@ -761,3 +795,20 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         trace.pop('selectedpoints', None)
 
             return fig_dict
+
+        _TIME_GROUP_MODE_VISIBLE = {'display': 'flex', 'alignItems': 'center'}
+        _TIME_GROUP_MODE_HIDDEN = {'display': 'none', 'alignItems': 'center'}
+        _TIME_BIN_SIZE_VISIBLE = {'display': 'flex', 'alignItems': 'center'}
+        _TIME_BIN_SIZE_HIDDEN = {'display': 'none', 'alignItems': 'center'}
+
+        @app.callback(
+            Output('time-group-mode-container', 'style'),
+            Output('time-bin-size-container', 'style'),
+            Input('time-viz-mode', 'value'),
+        )
+        def toggle_time_view_controls(viz_mode):
+            """Grouping applies to Scatter/Violin only; bin size to
+            Distribution/Overlay only — each control shows for its own pair."""
+            if viz_mode in ('scatter', 'violin'):
+                return _TIME_GROUP_MODE_VISIBLE, _TIME_BIN_SIZE_HIDDEN
+            return _TIME_GROUP_MODE_HIDDEN, _TIME_BIN_SIZE_VISIBLE

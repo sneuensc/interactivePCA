@@ -269,7 +269,7 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         """Show/hide legend toggle based on grouping."""
         if group == 'none' or group not in df.columns:
             return {'display': 'none'}
-        return {'display': 'flex', 'alignItems': 'center', 'marginRight': '12px'}
+        return {'display': 'flex', 'alignItems': 'center'}
     
     if show_annotation_table:
         @app.callback(
