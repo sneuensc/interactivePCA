@@ -466,7 +466,56 @@ def create_app(args):
         Input('tabs', 'value'),
         prevent_initial_call='initial_duplicate'
     )
-    
+
+    # Make the aesthetics panel draggable by its title bar. Wired off the
+    # panel's own className (toggled open/closed — see
+    # callbacks/aesthetics.py:toggle_aesthetics_modal) so the listener is
+    # attached the first time it's shown; a dataset flag keeps re-attachment
+    # a no-op on every later toggle. Position is set directly via
+    # style.left/style.top (never through a Dash Output), which is exactly
+    # why visibility uses className instead of `style` — see
+    # assets/draggable_panel.css.
+    app.clientside_callback(
+        """
+        function(class_name) {
+            var panel = document.getElementById('aesthetics-modal');
+            var titlebar = document.getElementById('aesthetics-modal-titlebar');
+            if (!panel || !titlebar || titlebar.dataset.dragInit === 'true') {
+                return window.dash_clientside.no_update;
+            }
+            titlebar.dataset.dragInit = 'true';
+
+            titlebar.addEventListener('mousedown', function(e) {
+                if (e.target.closest('button')) return;  // don't drag via the close (x)
+                e.preventDefault();
+                var rect = panel.getBoundingClientRect();
+                // Switch from centered (left:50%; transform) to an explicit
+                // pixel position so dragging moves it from where it visually is.
+                panel.style.left = rect.left + 'px';
+                panel.style.top = rect.top + 'px';
+                panel.style.transform = 'none';
+                var startX = e.clientX, startY = e.clientY;
+                var origLeft = rect.left, origTop = rect.top;
+
+                function handleMouseMove(moveEvent) {
+                    panel.style.left = (origLeft + moveEvent.clientX - startX) + 'px';
+                    panel.style.top = (origTop + moveEvent.clientY - startY) + 'px';
+                }
+                function handleMouseUp() {
+                    document.removeEventListener('mousemove', handleMouseMove);
+                    document.removeEventListener('mouseup', handleMouseUp);
+                }
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+            });
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('aesthetics-drag-dummy', 'data'),
+        Input('aesthetics-modal', 'className'),
+        prevent_initial_call=True,
+    )
+
     # ── Snapshot export ───────────────────────────────────────────────────
     register_snapshot_callback(app)
 
