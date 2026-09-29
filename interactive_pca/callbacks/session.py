@@ -19,10 +19,15 @@ them, so restoring those two is done by a clientside callback further down
 that calls Plotly.relayout() and sets pane flex-basis directly — see
 apply_saved_session (the props this module CAN restore this way) vs.
 _register_view_restore_clientside (the two it can't).
+
+Every save also stamps 'saved_at' (when) and 'git_version' (commit/branch/
+dirty-state of this checkout) — provenance only, never read back on restore.
 """
 
 import json
 import logging
+import os
+import subprocess
 from datetime import datetime
 
 import dash
@@ -35,6 +40,29 @@ def _session_filename():
     """A fresh, timestamped name for every save, so successive saves don't
     silently overwrite each other and it's clear which snapshot is which."""
     return f'session_{datetime.now():%Y%m%d_%H%M%S}.json'
+
+
+def _git_version_info():
+    """Best-effort commit/branch/dirty-state of this checkout, so a saved
+    session records which code version produced it. None if this isn't a
+    git checkout or git isn't available — never fails the save over it."""
+    repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _git(*args):
+        return subprocess.run(
+            ['git', *args], cwd=repo_dir, capture_output=True, text=True,
+            timeout=5, check=True,
+        ).stdout.strip()
+
+    try:
+        return {
+            'commit': _git('rev-parse', 'HEAD'),
+            'branch': _git('rev-parse', '--abbrev-ref', 'HEAD'),
+            'dirty': bool(_git('status', '--porcelain')),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logging.info("Could not determine git version for session save: %s", exc)
+        return None
 
 
 def _session_fields(show_map_plot, show_time_plot, show_annotation_table):
@@ -63,7 +91,8 @@ def _session_fields(show_map_plot, show_time_plot, show_annotation_table):
         fields += [
             ('time-variable', 'value', 'time_variable'),
             ('time-viz-mode', 'value', 'time_viz_mode'),
-            ('time-per-group-toggle', 'value', 'time_per_group'),
+            ('time-group-mode', 'value', 'time_group_mode'),
+            ('time-bin-size', 'value', 'time_bin_size'),
             ('time-window-enabled', 'value', 'time_window_enabled'),
         ]
     if show_annotation_table:
@@ -181,6 +210,8 @@ def register_session_callbacks(app, args, show_map_plot=True, show_time_plot=Tru
             raise dash.exceptions.PreventUpdate
         session_data = {key: value for (_, _, key), value in zip(all_fields, values)}
         session_data['args'] = saved_args
+        session_data['saved_at'] = datetime.now().isoformat(timespec='seconds')
+        session_data['git_version'] = _git_version_info()
         json_str = json.dumps(session_data, indent=2)
         filename = _session_filename()
         with open(filename, 'w') as f:

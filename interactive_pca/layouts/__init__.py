@@ -291,6 +291,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='pca-view-store', data=None),  # Current PCA plot zoom/pan/camera (relayoutData), for Save view
         dcc.Store(id='time-view-store', data=None),  # Current time plot zoom/pan (relayoutData), for Save view
         dcc.Store(id='pane-sizes-store', data={}),  # Draggable pane split percentages, keyed by resizer id
+        dcc.Store(id='aesthetics-drag-dummy', data=None),  # Dummy output for the aesthetics-panel drag-init clientside callback
         dcc.Store(id='map-fill-dummy', data=None),  # Dummy output for the geo pane-fill clientside callback
         # File-loader stores + browser modal (Restart and the tab loaders relaunch through these)
         *setup_stores(),
@@ -531,16 +532,21 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     style={'width': '200px'}
                 ),
             ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+            # Show Legend + Hover detailed stacked in one narrow column with
+            # little space between them (Show Legend's own visibility is
+            # still independently toggled by update_legend_visibility).
             html.Div([
-                dcc.Checklist(
-                    id='pca-legend-toggle',
-                    options=[{'label': ' Show Legend', 'value': 'show_legend'}],
-                    value=init_show_legend,
-                    style={'marginRight': '0px'},
-                    labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
-                )
-            ], id='legend-toggle-container', style={'display': 'none' if not init_show_legend else 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
-            html.Div([
+                html.Div(
+                    dcc.Checklist(
+                        id='pca-legend-toggle',
+                        options=[{'label': ' Show Legend', 'value': 'show_legend'}],
+                        value=init_show_legend,
+                        style={'marginRight': '0px'},
+                        labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
+                    ),
+                    id='legend-toggle-container',
+                    style={'display': 'none' if not init_show_legend else 'flex', 'alignItems': 'center'},
+                ),
                 dcc.Checklist(
                     id='hover-detailed-toggle',
                     options=[{'label': ' Hover detailed', 'value': 'hover_detailed'}],
@@ -548,7 +554,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     style={'marginRight': '0px'},
                     labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
                 )
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+            ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'flex-start',
+                     'justifyContent': 'center', 'gap': '2px', 'marginRight': '16px'}),
             html.Button(
                 'Aesthetics',
                 id='open-aesthetics',
@@ -563,10 +570,18 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
         
         # Right side controls
-        html.Fieldset([
-            html.Legend('Selection', style={
+        # A plain bordered box with the title overlapping the top border,
+        # rather than html.Fieldset/Legend — Bootstrap's own CSS overrides
+        # <legend> to a full-width block, which kills the browser's native
+        # "notch" that normally breaks the border behind the text, leaving
+        # the line running right through it. The absolute-positioned title
+        # + a background matching the surrounding control_section (#f8f9fa)
+        # fakes that same notch instead.
+        html.Div([
+            html.Span('Selection', style={
+                'position': 'absolute', 'top': '-9px', 'left': '10px',
+                'backgroundColor': '#f8f9fa', 'padding': '0 6px',
                 'fontSize': '12px', 'fontWeight': 'bold', 'color': '#555',
-                'padding': '0 6px', 'width': 'auto', 'marginBottom': '0'
             }),
             html.Div([
                 html.Div(
@@ -628,8 +643,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 ),
             ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
         ], style={
-            'border': '1px solid #ccc', 'borderRadius': '4px',
-            'padding': '2px 12px 6px', 'margin': '0'
+            'position': 'relative', 'border': '1px solid #ccc', 'borderRadius': '4px',
+            'padding': '10px 12px 8px', 'margin': '0', 'marginTop': '8px'
         }),
     ], style={
         'display': 'flex',
@@ -769,6 +784,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             time_span = time_max - time_min
             default_window_size = nice_step(time_span / 10) if time_span > 0 else 1
             slider_step = nice_step(time_span / 200) if time_span > 0 else 1
+            # Distribution/Overlay histogram bin width — ~50 bins across the
+            # range by default, rounded to a nice step (same convention as
+            # the time-slice window above).
+            default_bin_size = nice_step(time_span / 50) if time_span > 0 else 1
             # Round the bounds themselves outward to the nearest step too — a
             # step of 100 but bounds of 1450/13282 would still put every
             # position off the round grid (1450, 1550, ...). Widening is
@@ -794,47 +813,119 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             prev_order, next_order = (4, 2) if time_is_reversed else (2, 4)
             slider_wrap_class = 'time-slider-reversed' if time_is_reversed else ''
 
+            # Every control in this row shares one font (size + family) and is
+            # wrapped in its own flex-centered group with the same spacing, so
+            # labels/dropdowns/checkboxes/input all sit on one baseline instead
+            # of drifting with each component's own default line-height —
+            # dcc.Dropdown in particular doesn't otherwise inherit the page's
+            # (Bootstrap) font the way dbc.Checkbox/html.Label do.
+            _TF = {
+                'fontSize': '13px',
+                'fontFamily': ('-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, '
+                              'Helvetica, Arial, sans-serif'),
+            }
+            _time_ctrl_group_style = {'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}
+
+            def _time_ctrl_group(children, div_id=None, title=None, **extra_style):
+                style = dict(_time_ctrl_group_style)
+                style.update(extra_style)
+                kwargs = {'style': style}
+                if div_id is not None:
+                    kwargs['id'] = div_id
+                if title is not None:
+                    kwargs['title'] = title
+                return html.Div(children, **kwargs)
+
+            def _dropdown_width(labels, min_px=90, char_px=7.2, padding_px=50):
+                """Width sized to the longest option actually offered, rather
+                than a guessed fixed pixel value — column names are already
+                bounded by --col-abbrev, so the longest one is known here."""
+                longest = max((len(str(l)) for l in labels), default=0)
+                return f'{max(min_px, round(longest * char_px + padding_px))}px'
+
+            _view_mode_labels = ['Scatter', 'Violin', 'Distribution', 'Overlay']
+            _group_mode_labels = ['No group', 'Group', 'Group with name']
+
             time_hist = html.Div([
                 html.Div([
-                    html.Label('Variable:', style={'marginRight': '8px', 'fontWeight': 'bold', 'fontSize': '13px'}),
-                    dcc.Dropdown(
-                        id='time-variable',
-                        options=[{'label': col, 'value': col} for col in continuous_columns],
-                        value=default_continuous,
-                        clearable=False,
-                        style={'width': '180px', 'fontSize': '13px'}
-                    ),
-                    html.Div(
-                        dbc.Checkbox(
-                            id='time-invert-toggle', value=time_is_reversed, label='Invert',
-                            style={'fontSize': '13px', 'whiteSpace': 'nowrap'},
+                    _time_ctrl_group([
+                        html.Label('Variable:', style={**_TF, 'marginRight': '8px', 'fontWeight': 'bold'}),
+                        dcc.Dropdown(
+                            id='time-variable',
+                            options=[{'label': col, 'value': col} for col in continuous_columns],
+                            value=default_continuous,
+                            clearable=False,
+                            style={**_TF, 'width': _dropdown_width(continuous_columns)}
                         ),
-                        className='mx-3',
-                        title='Reverse the axis direction. Set automatically for the actual '
-                              '--time column; change freely for any variable.'
-                    ),
-                    html.Label('View:', style={'marginRight': '8px', 'marginLeft': '0', 'fontWeight': 'bold', 'fontSize': '13px'}),
-                    dcc.Dropdown(
-                        id='time-viz-mode',
-                        options=[
-                            {'label': 'Scatter', 'value': 'scatter'},
-                            {'label': 'Violin', 'value': 'violin'},
-                            {'label': 'Distribution', 'value': 'distribution'},
-                            {'label': 'Overlay', 'value': 'overlay'}
+                    ]),
+                    # Invert + Time slice stacked in one narrow column instead
+                    # of side by side, to save horizontal space in this row.
+                    # marginBottom: '0' overrides dbc.Checkbox's own default
+                    # .form-check spacing (inline style always wins over its
+                    # Bootstrap class), so the two sit close together.
+                    _time_ctrl_group(
+                        [
+                            # dbc.Checkbox has no `title` prop of its own — wrap it.
+                            html.Div(
+                                dbc.Checkbox(
+                                    id='time-invert-toggle', value=time_is_reversed, label='Invert',
+                                    style={**_TF, 'whiteSpace': 'nowrap', 'marginBottom': '0'},
+                                ),
+                                title='Reverse the axis direction. Set automatically for '
+                                      'the actual --time column; change freely for any variable.',
+                            ),
+                            dbc.Checkbox(
+                                id='time-window-enabled', value=False, label='Time slice',
+                                style={**_TF, 'whiteSpace': 'nowrap', 'marginBottom': '0'},
+                            ),
                         ],
-                        value='scatter',
-                        clearable=False,
-                        style={'width': '160px', 'fontSize': '13px'}
+                        flexDirection='column', alignItems='flex-start', justifyContent='center', gap='2px',
                     ),
-                    dbc.Checkbox(
-                        id='time-per-group-toggle', value=True, label='Per group',
-                        className='mx-3', style={'fontSize': '13px', 'whiteSpace': 'nowrap'},
+                    _time_ctrl_group([
+                        html.Label('View:', style={**_TF, 'marginRight': '8px', 'fontWeight': 'bold'}),
+                        dcc.Dropdown(
+                            id='time-viz-mode',
+                            options=[{'label': l, 'value': l.lower()} for l in _view_mode_labels],
+                            value='scatter',
+                            clearable=False,
+                            style={**_TF, 'width': _dropdown_width(_view_mode_labels)}
+                        ),
+                    ]),
+                    # Revealed only for Scatter/Violin (see toggle_time_view_controls).
+                    _time_ctrl_group(
+                        [
+                            html.Label('Grouping:', style={**_TF, 'marginRight': '8px', 'fontWeight': 'bold'}),
+                            dcc.Dropdown(
+                                id='time-group-mode',
+                                options=[
+                                    {'label': 'No group', 'value': 'none'},
+                                    {'label': 'Group', 'value': 'group'},
+                                    {'label': 'Group with name', 'value': 'group_named'},
+                                ],
+                                value='group',
+                                clearable=False,
+                                style={**_TF, 'width': _dropdown_width(_group_mode_labels)},
+                            ),
+                        ],
+                        div_id='time-group-mode-container',
+                        title="'No group': one combined strip, still colored by group. "
+                              "'Group': one strip per group (Scatter) or one violin per "
+                              "group. 'Group with name': same, with the group name shown.",
                     ),
-                    dbc.Checkbox(
-                        id='time-window-enabled', value=False, label='Time slice',
-                        className='ms-4', style={'fontSize': '13px', 'whiteSpace': 'nowrap'}
+                    # Revealed only for Distribution/Overlay (see toggle_time_view_controls).
+                    _time_ctrl_group(
+                        [
+                            html.Label('Bin size:', style={**_TF, 'marginRight': '8px', 'whiteSpace': 'nowrap'}),
+                            dbc.Input(
+                                id='time-bin-size', type='number', value=default_bin_size,
+                                min=0, debounce=True,
+                                style={**_TF, 'width': '90px'}
+                            ),
+                        ],
+                        div_id='time-bin-size-container',
+                        display='none',
                     ),
-                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px', 'padding': '8px 12px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'}),
+                ], style={**_TF, 'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px', 'padding': '8px 12px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'}),
                 dcc.Graph(
                     id='time-histogram',
                     figure=fig_time,
@@ -1066,66 +1157,109 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # Aesthetics modal
     return html.Div([
         control_section,
-        dbc.Modal(
+        # A plain draggable panel instead of a centered/fixed Bootstrap modal —
+        # drag by the title bar (see app.py's clientside drag-init callback,
+        # triggered off this component's className). Visibility is toggled via
+        # className (assets/draggable_panel.css: .draggable-panel is hidden,
+        # .panel-open shows it) rather than an inline style, specifically so
+        # the drag handler's direct DOM position (style.left/top) is never
+        # clobbered by a later Dash-side style update.
+        html.Div(
             [
-                dbc.ModalHeader(dbc.ModalTitle("Edit Marker Aesthetics")),
-                dbc.ModalBody([
-                    html.P(
-                        "Edit values per group. Use '-' to keep default value.",
-                        style={'color': '#666', 'marginBottom': '12px'}
-                    ),
-                    html.Div(
-                        id='aesthetics-table-container',
-                        style={
-                            'overflowX': 'auto',
-                            'overflowY': 'auto',
-                            'maxHeight': '60vh'
-                        }
-                    )
-                ], style={'maxHeight': '70vh', 'overflowY': 'auto'}),
-                dbc.ModalFooter([
-                    html.Button(
-                        'Export to File',
-                        id='export-aesthetics-btn',
-                        style={
-                            'padding': '8px 16px',
-                            'border': '1px solid #28a745',
-                            'borderRadius': '4px',
-                            'backgroundColor': '#28a745',
-                            'color': '#ffffff',
-                            'cursor': 'pointer',
-                            'marginRight': 'auto'
-                        }
-                    ),
-                    html.Button(
-                        'Cancel',
-                        id='cancel-aesthetics',
-                        style={
-                            'padding': '8px 16px',
-                            'border': '1px solid #ccc',
-                            'borderRadius': '4px',
-                            'backgroundColor': '#ffffff',
-                            'cursor': 'pointer',
-                            'marginRight': '8px'
-                        }
-                    ),
-                    html.Button(
-                        'Save Changes',
-                        id='save-aesthetics',
-                        style={
-                            'padding': '8px 16px',
-                            'border': '1px solid #0066cc',
-                            'borderRadius': '4px',
-                            'backgroundColor': '#0066cc',
-                            'color': '#ffffff',
-                            'cursor': 'pointer'
-                        }
-                    )
-                ])
+                html.Div(
+                    [
+                        html.Span("Edit Marker Aesthetics", style={'fontWeight': 'bold', 'fontSize': '16px'}),
+                        html.Button(
+                            '✕', id='aesthetics-modal-close-x', n_clicks=0,
+                            title='Close',
+                            style={
+                                'border': 'none', 'background': 'none', 'fontSize': '18px',
+                                'lineHeight': '1', 'padding': '4px 8px', 'cursor': 'pointer',
+                                'color': '#666',
+                            }
+                        ),
+                    ],
+                    id='aesthetics-modal-titlebar',
+                    style={
+                        'cursor': 'move', 'padding': '10px 16px',
+                        'backgroundColor': '#f8f9fa', 'borderBottom': '1px solid #dee2e6',
+                        'borderRadius': '6px 6px 0 0', 'display': 'flex',
+                        'justifyContent': 'space-between', 'alignItems': 'center',
+                        'userSelect': 'none', 'flex': '0 0 auto',
+                    },
+                ),
+                html.Div(
+                    [
+                        html.P(
+                            "Edit values per group. Use '-' to keep default value.",
+                            style={'color': '#666', 'marginBottom': '12px'}
+                        ),
+                        html.Div(
+                            id='aesthetics-table-container',
+                            style={
+                                'overflowX': 'auto',
+                                'overflowY': 'auto',
+                                'maxHeight': '55vh'
+                            }
+                        )
+                    ],
+                    style={'padding': '16px', 'overflowY': 'auto', 'flex': '1 1 auto'},
+                ),
+                html.Div(
+                    [
+                        html.Button(
+                            'Export to File',
+                            id='export-aesthetics-btn',
+                            style={
+                                'padding': '8px 16px',
+                                'border': '1px solid #28a745',
+                                'borderRadius': '4px',
+                                'backgroundColor': '#28a745',
+                                'color': '#ffffff',
+                                'cursor': 'pointer',
+                                'marginRight': 'auto'
+                            }
+                        ),
+                        html.Button(
+                            'Cancel',
+                            id='cancel-aesthetics',
+                            style={
+                                'padding': '8px 16px',
+                                'border': '1px solid #ccc',
+                                'borderRadius': '4px',
+                                'backgroundColor': '#ffffff',
+                                'cursor': 'pointer',
+                                'marginRight': '8px'
+                            }
+                        ),
+                        html.Button(
+                            'Save Changes',
+                            id='save-aesthetics',
+                            style={
+                                'padding': '8px 16px',
+                                'border': '1px solid #0066cc',
+                                'borderRadius': '4px',
+                                'backgroundColor': '#0066cc',
+                                'color': '#ffffff',
+                                'cursor': 'pointer'
+                            }
+                        )
+                    ],
+                    style={
+                        'padding': '12px 16px', 'borderTop': '1px solid #dee2e6',
+                        'display': 'flex', 'alignItems': 'center', 'flex': '0 0 auto',
+                    },
+                ),
             ],
             id='aesthetics-modal',
-            is_open=False,
-            size='lg'
+            className='draggable-panel',
+            style={
+                'position': 'fixed', 'top': '80px', 'left': '50%',
+                'transform': 'translateX(-50%)', 'width': 'min(900px, 90vw)',
+                'maxHeight': '85vh', 'flexDirection': 'column',
+                'backgroundColor': 'white', 'borderRadius': '6px',
+                'boxShadow': '0 4px 24px rgba(0,0,0,0.3)', 'zIndex': 1050,
+            },
         ),
         dcc.Download(id='download-aesthetics'),
         html.Div(
