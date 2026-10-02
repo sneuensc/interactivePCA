@@ -352,6 +352,7 @@ def create_layout(args, df, pcs,
         about_modal(),
         dcc.Download(id='download-snapshot'),
         dcc.Download(id='download-session'),
+        dcc.Download(id='download-selection'),
 
         # Header with tabs
         html.Div([

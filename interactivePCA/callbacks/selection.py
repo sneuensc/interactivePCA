@@ -6,6 +6,7 @@ Handles selection sync across plots, tables, and stores.
 
 import os
 import logging
+from datetime import datetime
 import pandas as pd
 import numpy as np
 import dash
@@ -145,22 +146,35 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             return selected_cols
     
     @app.callback(
+        Output('download-selection', 'data'),
         Input('save-selection', 'n_clicks'),
         State('selection-store', 'data'),
         prevent_initial_call=True
     )
     def save_selection(n_clicks, selected_ids):
-        """Save selected sample IDs to a file."""
-        if not n_clicks or not selected_ids:
-            return
-        
-        # Save to file
-        output_file = 'selected_samples.txt'
-        with open(output_file, 'w') as f:
-            for sid in selected_ids:
-                f.write(f"{sid}\n")
-        
-        logging.info(f"Saved {len(selected_ids)} selected IDs to {output_file}")
+        """Hand the selected sample IDs to the browser as a download (goes
+        to the user's own Downloads folder) rather than writing a file on
+        the server, which the user has no direct access to."""
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+
+        # An empty/missing selection-store is the app-wide sentinel for "no
+        # filter, everything selected" (same convention used everywhere else
+        # this store is read) — save every loaded sample in that case,
+        # rather than silently doing nothing. The time-slice's own sentinel
+        # for a window matching zero real samples is the other direction:
+        # a non-empty list that isn't actually any real ids.
+        if not selected_ids:
+            ids = df['id'].tolist()
+        elif selected_ids == ['__time_window_empty__']:
+            ids = []
+        else:
+            ids = selected_ids
+
+        filename = f'selected_samples_{datetime.now():%Y%m%d_%H%M%S}.txt'
+        content = '\n'.join(str(sid) for sid in ids) + ('\n' if ids else '')
+        logging.info(f"Saving {len(ids)} selected IDs to {filename} (browser download)")
+        return dict(content=content, filename=filename)
     
     def _apply_all_selected(fig):
         """Set selectedpoints to all indices on every trace that has customdata,
