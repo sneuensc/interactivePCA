@@ -25,8 +25,8 @@ The interactivePCA allows users to visualize PCA or MDS scatter plots together w
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/interactive-pca.git
-cd interactive-pca
+git clone https://github.com/sneuensc/interactivePCA.git
+cd interactivePCA
 pip install -e .
 ```
 
@@ -40,7 +40,7 @@ Showing all features (PCA plot, map plot, time plot, annotation table)
 ## activate python environment if needed
 # source .venv/bin/activate
 
-interactive-pca --eigenvec data/samples.eigenvec \
+interactivePCA --eigenvec data/samples.eigenvec \
                  --annotation data/samples.anno \
                  --latitude Latitude \
                  --longitude Longitude \
@@ -54,7 +54,7 @@ Then open <http://localhost:8050> in your web browser.
 Showing only PCA scatter plot
 
 ```bash
-interactive-pca --eigenvec data/samples.eigenvec
+interactivePCA --eigenvec data/samples.eigenvec
 ```
 
 Then open <http://localhost:8050> in your web browser.
@@ -62,7 +62,7 @@ Then open <http://localhost:8050> in your web browser.
 ### List of all parameters
 
 ```bash
-interactive-pca --help
+interactivePCA --help
 ```
 
 ### As a Python module
@@ -116,7 +116,7 @@ interactive_pca/
 ├── __init__.py              # Package exports
 ├── app.py                   # Dash app factory
 ├── args.py                  # CLI/parser arguments
-├── cli.py                   # interactive-pca entry point
+├── cli.py                   # interactivePCA entry point
 ├── data_loader.py           # Input loading + merge helpers
 ├── plots.py                 # Plot generation helpers
 ├── utils.py                 # Generic utility functions
