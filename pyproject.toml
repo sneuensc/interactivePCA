@@ -48,6 +48,8 @@ dev = [
 
 [project.scripts]
 interactive-pca = "interactive_pca.cli:main"
+interactive-pca-refbuild = "interactive_pca.projection.cli:refbuild_main"
+interactive-pca-project = "interactive_pca.projection.cli:project_main"
 
 [project.urls]
 Homepage = "https://github.com/yourusername/interactive-pca"
