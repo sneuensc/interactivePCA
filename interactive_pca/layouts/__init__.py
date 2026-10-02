@@ -33,6 +33,59 @@ from .setup import (
     file_browser_modal,
     setup_stores,
 )
+from ..about import version_info
+
+
+def about_modal():
+    """The dialog behind the header logo: the mark at size, plus provenance."""
+    info = version_info()
+    rows = []
+    if info['version']:
+        rows.append(('Version', info['version']))
+    if info['commit']:
+        commit = info['commit'] + (' + local changes' if info['dirty'] else '')
+        if info['branch'] and info['branch'] != 'HEAD':
+            commit = f"{commit}  ({info['branch']})"
+        rows.append(('Commit', commit))
+    if info['commit_date']:
+        rows.append(('Committed', info['commit_date']))
+    if info['author']:
+        rows.append(('Author', info['author']))
+    if info['email']:
+        rows.append(('Contact', html.A(info['email'], href=f"mailto:{info['email']}")))
+
+    # Labels right-aligned against values left-aligned, so the pairs meet in the
+    # middle and every value starts on the same column.
+    table = html.Table(
+        [html.Tr([
+            html.Td(label, style={'paddingRight': '18px', 'color': '#6c757d',
+                                  'verticalAlign': 'top', 'whiteSpace': 'nowrap',
+                                  'textAlign': 'right'}),
+            html.Td(value, style={'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                                  'textAlign': 'left'}),
+        ]) for label, value in rows],
+        style={'margin': '0 auto', 'fontSize': '14px', 'borderCollapse': 'collapse',
+               'lineHeight': '1.9'},
+    )
+
+    return dbc.Modal(
+        [
+            dbc.ModalHeader(dbc.ModalTitle('interactivePCA')),
+            dbc.ModalBody(
+                html.Div(
+                    [
+                        html.Img(src='/assets/logo.svg',
+                                 style={'width': '220px', 'height': '220px',
+                                        'display': 'block', 'margin': '0 auto 18px'}),
+                        table,
+                    ],
+                    style={'textAlign': 'center'},
+                )
+            ),
+            dbc.ModalFooter(dbc.Button('Close', id='about-close', color='secondary', n_clicks=0)),
+        ],
+        id='about-modal', is_open=False, centered=True,
+    )
 
 
 def create_layout(args, df, pcs,
@@ -296,13 +349,17 @@ def create_layout(args, df, pcs,
         # File-loader stores + browser modal (Restart and the tab loaders relaunch through these)
         *setup_stores(),
         file_browser_modal(),
+        about_modal(),
         dcc.Download(id='download-snapshot'),
         dcc.Download(id='download-session'),
 
         # Header with tabs
         html.Div([
             html.Img(
-                src='/assets/dbc_logo_400x400.jpg',
+                src='/assets/logo.svg',
+                id='app-logo',
+                title='About interactivePCA',
+                n_clicks=0,
                 style={
                     'height': '40px',
                     'width': '40px',
@@ -310,7 +367,8 @@ def create_layout(args, df, pcs,
                     'marginRight': '12px',
                     'marginTop': '5px',
                     'marginBottom': '5px',
-                    'verticalAlign': 'middle'
+                    'verticalAlign': 'middle',
+                    'cursor': 'pointer'
                 }
             ),
             html.H2("interactivePCA", style={
