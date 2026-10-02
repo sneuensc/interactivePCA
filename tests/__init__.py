@@ -1,3 +1,3 @@
 """
-Test package for interactive_pca.
+Test package for interactivePCA.
 """

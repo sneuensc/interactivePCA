@@ -2,9 +2,9 @@
 
 import pandas as pd
 
-from interactive_pca.args import parse_args
-from interactive_pca.app import create_app
-from interactive_pca.callbacks.setup import _compose_argv
+from interactivePCA.args import parse_args
+from interactivePCA.app import create_app
+from interactivePCA.callbacks.setup import _compose_argv
 
 
 def test_app_builds_without_data():

@@ -3,8 +3,8 @@
 import tempfile
 import os
 from pathlib import Path
-from interactive_pca import create_app
-from interactive_pca.args import parse_args
+from interactivePCA import create_app
+from interactivePCA.args import parse_args
 
 def create_test_data():
     """Create temporary test files."""

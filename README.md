@@ -68,7 +68,7 @@ interactivePCA --help
 ### As a Python module
 
 ```python
-from interactive_pca import load_eigenvec, load_annotation, parse_args
+from interactivePCA import load_eigenvec, load_annotation, parse_args
 
 # Parse arguments
 args = parse_args(['--eigenvec', 'data/samples.eigenvec', 
@@ -112,7 +112,7 @@ sample2      Sweden    2021   60.0       15.0        modern
 ## Package Structure
 
 ```text
-interactive_pca/
+interactivePCA/
 ├── __init__.py              # Package exports
 ├── app.py                   # Dash app factory
 ├── args.py                  # CLI/parser arguments

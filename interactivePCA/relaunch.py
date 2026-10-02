@@ -19,11 +19,11 @@ import threading
 
 
 def schedule_relaunch(argv, delay=0.8):
-    """Relaunch ``python -m interactive_pca <argv>`` in a detached session.
+    """Relaunch ``python -m interactivePCA <argv>`` in a detached session.
 
     The current process exits (freeing its port) once the child is spawned.
     """
-    cmd = [sys.executable, '-m', 'interactive_pca', *argv]
+    cmd = [sys.executable, '-m', 'interactivePCA', *argv]
     logging.info("Relaunching: %s", ' '.join(cmd))
     inner = ' '.join(shlex.quote(x) for x in cmd)
 
