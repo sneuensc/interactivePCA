@@ -7,11 +7,10 @@ are pulled from a CDN (exactly like the live app pulls dash-renderer/React
 from its own server — "self-contained" here means one file holding all the
 DATA and CUSTOM LOGIC, not that every library is inlined), and everything
 else — hover sync, legend-click sync, cross-plot lasso/box-select syncing,
-a sortable/filterable table, an optional time-slice slider — is plain
-JavaScript operating on the embedded data, ported from the equivalent
-clientside logic in hover_sync.py / legend_sync.py, or (for selection
-syncing and the time slider) newly written to mirror what their Python
-counterparts in selection.py do.
+a sortable/filterable table — is plain JavaScript operating on the embedded
+data, ported from the equivalent clientside logic in hover_sync.py /
+legend_sync.py, or (for selection syncing) newly written to mirror what its
+Python counterpart in selection.py does.
 
 Deliberately NOT reproduced: the live aesthetics editor (recoloring groups)
 and the free-form pandas query box — unsafe/impractical to eval arbitrary
@@ -28,19 +27,17 @@ _AG_GRID_CDN = 'https://cdn.jsdelivr.net/npm/ag-grid-community@36.2.0/dist/ag-gr
 _PLOTLY_CDN = 'https://cdn.plot.ly/plotly-2.35.2.min.js'
 
 
-def register_snapshot_callback(app, show_time_plot=True):
+def register_snapshot_callback(app):
     states = [
         State('pca-annotation-table', 'rowData'),
         State('pca-annotation-table', 'columnDefs'),
+        State('selection-store', 'data'),
     ]
-    if show_time_plot:
-        states.append(State('time-variable', 'value'))
 
     app.clientside_callback(
         """
-        function(n_clicks, rowData, colDefs""" + (', timeVar' if show_time_plot else '') + """) {
+        function(n_clicks, rowData, colDefs, selectedIds) {
             if (!n_clicks) return window.dash_clientside.no_update;
-            """ + ('' if show_time_plot else 'var timeVar = null;') + """
 
             // ── read current pane sizes from the live DOM ────────────────
             function px(id, prop) {
@@ -94,6 +91,13 @@ def register_snapshot_callback(app, show_time_plot=True):
                 layout.autosize = true;
                 delete layout.width;
                 delete layout.height;
+                // Drop any drawn lasso/box-select outline — a shape left over
+                // from however the selection was made, not the selection
+                // itself. The actual selected points stay visible via each
+                // trace's own selectedpoints (still present in `data` above).
+                // dragmode is kept as-is so lasso/box-select still works in
+                // the exported file.
+                delete layout.selections;
 
                 var cfg = {responsive:true, scrollZoom:true, displayModeBar:true};
                 var plotlyTag = first
@@ -101,7 +105,13 @@ def register_snapshot_callback(app, show_time_plot=True):
                     : '';
                 first = false;
 
-                var id = 'p_' + compId.replace(/-/g,'_');
+                // The rendered Plotly div's own id must equal compId exactly
+                // (not some derived name) — the runtime script below looks
+                // plots up by document.getElementById(plotId) using these
+                // same ids (DATA.plotIds), so any mismatch here means every
+                // getDiv() call returns null and hover/legend/selection sync
+                // and the counter all silently do nothing.
+                var id = compId;
                 figuresJson[compId] = {id: id, data: data, layout: layout};
                 panels[compId] =
                     plotlyTag +
@@ -125,19 +135,18 @@ def register_snapshot_callback(app, show_time_plot=True):
             var rows  = rowData || [];
             var allIds = rows.map(function(r) { return String(r.id); });
 
-            // id -> time value, for the optional time-slice slider — only
-            // possible when the time column is among the ones shown in the
-            // table (rowData only carries the user's currently-selected
-            // annotation columns, same as the live table).
-            var idToTime = null;
-            if (timeVar && rows.length && (timeVar in rows[0])) {
-                idToTime = {};
-                rows.forEach(function(r) {
-                    var v = r[timeVar];
-                    if (v !== null && v !== undefined && v !== '') {
-                        idToTime[String(r.id)] = parseFloat(v);
-                    }
-                });
+            // The live app's selection-store conventions carry over as-is:
+            // an empty/missing list means "nothing filtered, everything
+            // selected" (null here, same sentinel the runtime script uses);
+            // the single id '__time_window_empty__' means a genuinely empty
+            // selection (selecting zero real ids), not "all".
+            var initialSelection = null;
+            if (Array.isArray(selectedIds) && selectedIds.length) {
+                if (selectedIds.length === 1 && selectedIds[0] === '__time_window_empty__') {
+                    initialSelection = [];
+                } else {
+                    initialSelection = selectedIds.map(String);
+                }
             }
 
             // ── assemble HTML ────────────────────────────────────────────
@@ -156,46 +165,27 @@ def register_snapshot_callback(app, show_time_plot=True):
                 'header h1{font-size:14px;font-weight:600}',
                 'header span{font-size:11px;color:#888}',
                 '#sel-counter{font-size:12px;font-weight:600;color:#333;margin-left:auto}',
-                '#reset-btn{padding:4px 10px;border:1px solid #ccc;border-radius:4px;',
-                '  background:#fff;cursor:pointer;font-size:12px}',
-                '#reset-btn:hover{background:#f0f0f0}',
                 '#workspace{display:flex;height:calc(100vh - 38px);overflow:hidden}',
                 colCss + '#left-col,#right-col{min-width:0;display:flex;flex-direction:column;overflow:hidden}',
                 '#pca-wrap{'  + pcaFlex  + ';min-height:0}',
-                '#time-wrap{' + timeFlex + ';min-height:0;display:flex;flex-direction:column}',
-                '#time-plot-area{flex:1 1 auto;min-height:0}',
+                '#time-wrap{' + timeFlex + ';min-height:0}',
                 '#map-wrap{'  + mapFlex  + ';min-height:0}',
                 '#tbl-wrap{flex:1 1 auto;min-height:0;overflow:hidden}',
                 '#ag-table{height:100%;width:100%}',
                 '.rv{width:6px;cursor:col-resize;background:#ccc;flex:0 0 6px}',
                 '.rh{height:6px;cursor:row-resize;background:#ccc;flex:0 0 6px}',
                 '.rv:hover,.rh:hover{background:#888}',
-                '#time-slice{flex:0 0 auto;padding:6px 14px;border-top:1px solid #eee;',
-                '  display:flex;align-items:center;gap:10px;font-size:12px;color:#333}',
-                '#time-slice .rng{position:relative;flex:1 1 auto;height:18px}',
-                '#time-slice input[type=range]{position:absolute;left:0;right:0;top:0;',
-                '  width:100%;margin:0;pointer-events:none;-webkit-appearance:none;background:transparent}',
-                '#time-slice input[type=range]::-webkit-slider-thumb{pointer-events:auto;',
-                '  -webkit-appearance:none;width:14px;height:14px;border-radius:50%;',
-                '  background:#0066cc;cursor:pointer;margin-top:2px}',
-                '#time-slice input[type=range]::-moz-range-thumb{pointer-events:auto;',
-                '  width:14px;height:14px;border-radius:50%;background:#0066cc;cursor:pointer;border:none}',
-                '#time-slice input[type=range]::-webkit-slider-runnable-track{height:4px;background:#ddd}',
                 '<\\/style>',
                 '<\\/head><body>',
                 '<header><h1>interactivePCA snapshot<\\/h1>',
                 '<span>' + ts.replace('T',' ') + '<\\/span>',
                 '<span id="sel-counter"><\\/span>',
-                '<button id="reset-btn">Reset selection<\\/button>',
                 '<\\/header>',
                 '<div id="workspace">',
                 '  <div id="left-col">',
                 '    <div id="pca-wrap">'  + (panels['pca-plot']      || '') + '<\\/div>',
                 '    <div class="rh" id="hl"><\\/div>',
-                '    <div id="time-wrap">',
-                '      <div id="time-plot-area">' + (panels['time-histogram'] || '') + '<\\/div>',
-                (idToTime ? '      <div id="time-slice"><\\/div>' : ''),
-                '    <\\/div>',
+                '    <div id="time-wrap">' + (panels['time-histogram'] || '') + '<\\/div>',
                 '  <\\/div>',
                 '  <div class="rv" id="vr"><\\/div>',
                 '  <div id="right-col">',
@@ -209,8 +199,8 @@ def register_snapshot_callback(app, show_time_plot=True):
                     allIds: allIds,
                     rows: rows,
                     columnDefs: vcols,
-                    idToTime: idToTime,
                     plotIds: Object.keys(figuresJson),
+                    initialSelection: initialSelection,
                 }) + ';',
                 '<\\/script>',
                 '<script>' + SNAPSHOT_RUNTIME_JS + '<\\/script>',
@@ -240,9 +230,9 @@ def register_snapshot_callback(app, show_time_plot=True):
 def _runtime_js():
     """The JS that ships INSIDE the exported HTML file (not the callback that
     builds it) — hover sync, legend-click sync, cross-plot selection syncing,
-    the table, and the optional time-slice slider. Pure functions of
-    window.__SNAPSHOT_DATA__ and whatever Plotly figures got embedded above
-    it, so it's identical on every export regardless of what was plotted.
+    and the table. Pure functions of window.__SNAPSHOT_DATA__ and whatever
+    Plotly figures got embedded above it, so it's identical on every export
+    regardless of what was plotted.
 
     Returned as a JS STRING LITERAL (quotes included) — the outer callback
     template splices this in as the right-hand side of a `+` concatenation
@@ -326,14 +316,6 @@ _RUNTIME_JS_SOURCE = r"""
                 applySelection(ids);
             });
             div.on('plotly_deselect', function() { applySelection(null); });
-        });
-    }
-
-    var resetBtn = document.getElementById('reset-btn');
-    if (resetBtn) {
-        resetBtn.addEventListener('click', function() {
-            applySelection(null);
-            resetTimeSlice();
         });
     }
 
@@ -491,58 +473,6 @@ _RUNTIME_JS_SOURCE = r"""
     }
 
     // ══════════════════════════════════════════════════════════════════
-    // Time-slice slider — a two-thumb range over the time column (when
-    // present among the exported table columns), mirroring
-    // sync_time_window_to_selection: moving it overrides the selection
-    // with exactly the ids whose time value falls inside the window.
-    // ══════════════════════════════════════════════════════════════════
-    var tsLo, tsHi, tsLabel, tsMin, tsMax;
-
-    function resetTimeSlice() {
-        if (!tsLo) return;
-        tsLo.value = tsMin;
-        tsHi.value = tsMax;
-        renderTimeSliceLabel();
-    }
-
-    function renderTimeSliceLabel() {
-        tsLabel.textContent = Number(tsLo.value).toFixed(1) + ' – ' + Number(tsHi.value).toFixed(1);
-    }
-
-    function onTimeSliceInput() {
-        var lo = parseFloat(tsLo.value), hi = parseFloat(tsHi.value);
-        if (lo > hi) { var t = lo; lo = hi; hi = t; }
-        renderTimeSliceLabel();
-        var ids = Object.keys(DATA.idToTime).filter(function(id) {
-            var v = DATA.idToTime[id];
-            return v >= lo && v <= hi;
-        });
-        applySelection(ids);
-    }
-
-    function wireTimeSlice() {
-        var wrap = document.getElementById('time-slice');
-        if (!wrap || !DATA.idToTime) return;
-        var values = Object.keys(DATA.idToTime).map(function(k) { return DATA.idToTime[k]; });
-        tsMin = Math.min.apply(null, values);
-        tsMax = Math.max.apply(null, values);
-
-        wrap.innerHTML =
-            '<span>Time slice:<\/span>' +
-            '<div class="rng">' +
-            '<input type="range" id="ts-lo" min="' + tsMin + '" max="' + tsMax + '" value="' + tsMin + '" step="any">' +
-            '<input type="range" id="ts-hi" min="' + tsMin + '" max="' + tsMax + '" value="' + tsMax + '" step="any">' +
-            '<\/div>' +
-            '<span id="ts-label"><\/span>';
-        tsLo = document.getElementById('ts-lo');
-        tsHi = document.getElementById('ts-hi');
-        tsLabel = document.getElementById('ts-label');
-        renderTimeSliceLabel();
-        tsLo.addEventListener('input', onTimeSliceInput);
-        tsHi.addEventListener('input', onTimeSliceInput);
-    }
-
-    // ══════════════════════════════════════════════════════════════════
     // Table — AG Grid Community, loaded from CDN. Sortable/filterable per
     // column out of the box; rows matching the current selection stay at
     // full opacity, everything else dims. Deliberately read-only (no row
@@ -581,7 +511,12 @@ _RUNTIME_JS_SOURCE = r"""
                 if (!p) return;
                 var r = p.getBoundingClientRect();
                 if (r.width > 0 && r.height > 0) {
-                    try { Plotly.relayout(e, {width: r.width, height: r.height}); } catch (x) {}
+                    // Plotly.Plots.resize() (not a manual relayout({width,
+                    // height})) is what actually re-fits a geo/map subplot's
+                    // projection to the new aspect ratio — passing explicit
+                    // width/height resizes the SVG/canvas but leaves the
+                    // world background sized for the old shape.
+                    try { Plotly.Plots.resize(e); } catch (x) {}
                 }
             });
             if (window._gridApi) window._gridApi.sizeColumnsToFit();
@@ -626,10 +561,15 @@ _RUNTIME_JS_SOURCE = r"""
         iv('vr', 'left-col', 'right-col');
         ih('hl', 'pca-wrap', 'time-wrap');
         ih('hr', 'map-wrap', 'tbl-wrap');
+        // Seed the selection state from whatever was actually selected on
+        // the live app at export time (DATA.initialSelection), rather than
+        // starting from "everything selected" — the embedded figures already
+        // show the right points highlighted; without this the counter and
+        // table dimming would contradict what's drawn until the first click.
+        currentSelection = DATA.initialSelection;
         wireSelectionEvents();
         wireHoverSync();
         wireLegendSync();
-        wireTimeSlice();
         wireTable();
         updateCounter();
         setTimeout(rp, 80);

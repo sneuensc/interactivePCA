@@ -74,19 +74,42 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         """Toggle detailed hover information."""
         return 'hover_detailed' in hover_toggle
 
+    def _clear_lasso_outline(fig):
+        """Clear a drawn lasso/box-select outline without touching which
+        points are actually selected. Used when freezing: the selection
+        itself stays exactly as-is, just the drawn shape goes away, since
+        it can no longer be dragged into a different selection anyway."""
+        if fig and fig.get('layout', {}).get('selections'):
+            fig['layout']['selections'] = []
+            return fig
+        return dash.no_update
+
+    _freeze_plot_ids = ['pca-plot']
+    if show_map_plot:
+        _freeze_plot_ids.append('pca-map-plot')
+    if show_time_plot:
+        _freeze_plot_ids.append('time-histogram')
+
     @app.callback(
         Output('selection-frozen', 'data'),
         Output('freeze-selection-button', 'children'),
         Output('freeze-selection-button', 'style'),
+        [Output(pid, 'figure', allow_duplicate=True) for pid in _freeze_plot_ids],
         Input('freeze-selection-button', 'n_clicks'),
         State('selection-frozen', 'data'),
+        [State(pid, 'figure') for pid in _freeze_plot_ids],
         prevent_initial_call=True,
     )
-    def toggle_selection_freeze(_n, frozen):
+    def toggle_selection_freeze(_n, frozen, *figs):
         """Lock/unlock the current selection. Every selection-store writer
         below checks this and no-ops while frozen — the underlying
         interaction (lasso, filter, time-slice...) still happens, it just
-        doesn't get written to the store, so nothing on screen changes."""
+        doesn't get written to the store, so nothing on screen changes.
+
+        Freezing also clears any drawn lasso/box-select outline on every
+        plot — it's now stale (nothing can extend it into a new selection
+        while frozen) and would otherwise just linger on screen.
+        """
         new_frozen = not frozen
         label = 'Unfreeze' if new_frozen else 'Freeze'
         style = {
@@ -97,7 +120,11 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             'fontWeight': 'bold' if new_frozen else 'normal',
             'cursor': 'pointer',
         }
-        return new_frozen, label, style
+        if new_frozen:
+            fig_outs = tuple(_clear_lasso_outline(f) for f in figs)
+        else:
+            fig_outs = tuple(dash.no_update for _ in figs)
+        return (new_frozen, label, style) + fig_outs
     
     if show_annotation_table:
         @app.callback(
