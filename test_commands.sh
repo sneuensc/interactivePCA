@@ -1,17 +1,17 @@
-interactive-pca --help
+interactivePCA --help
 
-interactive-pca \
+interactivePCA \
 	--eigenvec data/aadr2.eigenvec \
 	--server-port 8051
 
-interactive-pca \
+interactivePCA \
 	--eigenvec data/aadr2.eigenvec \
 	--server-port 8051  \
 	--annotation data/aadr2.anno \
 	--longitude Long. \
 	--latitude Lat.
 	
-interactive-pca \
+interactivePCA \
 	--eigenvec data/aadr2.eigenvec \
 	--server-port 8051  \
 	--annotation data/aadr2.anno \
@@ -21,7 +21,7 @@ interactive-pca \
 	
 	
 	
-interactive-pca \
+interactivePCA \
 	--eigenvec data-lucas/coord.tsv \
 	--server-port 8051  \
 	--annotation data-lucas/annot.tsv \

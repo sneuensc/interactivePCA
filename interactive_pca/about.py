@@ -16,7 +16,7 @@ try:                                     # Python 3.8+
 except ImportError:                      # pragma: no cover - very old runtimes
     _metadata = None
 
-DIST = 'interactive-pca'
+DIST = 'interactivePCA'
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
