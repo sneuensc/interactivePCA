@@ -517,7 +517,7 @@ def create_app(args):
     )
 
     # ── Snapshot export ───────────────────────────────────────────────────
-    register_snapshot_callback(app)
+    register_snapshot_callback(app, show_time_plot=show_time_plot)
 
     # ── Restart ─────────────────────────────────────────────────────────────
     # Relaunch the process with no data (just the port) to return to the setup
