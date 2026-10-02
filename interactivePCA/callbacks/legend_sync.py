@@ -10,7 +10,19 @@ status: selected / unselected / hidden.
 Implementation mirrors hover_sync: a single clientside callback listens to
 `restyleData` from every plot.  The callback calls Plotly.restyle() directly
 on the other divs (no Python round-trip) and returns an updated store value.
-A Set-based skip flag prevents the programmatic restyle from re-entering.
+
+Re-entrancy (our own programmatic restyle on the other plots firing their
+own restyleData right back at this same callback) is handled by comparing
+against the last known visibility per trace NAME (window._legendVisState)
+rather than a "did we just touch this plot" skip flag: restyling a plot to
+the value it's already being set to is a no-op by definition, so the echo
+is recognised and dropped without needing to track which plot caused it.
+This matters because a per-plot skip flag only survives for exactly one
+echo — if a "hide" click's echoes haven't all arrived yet when "show" is
+clicked, the flag for a given plot can get consumed by the wrong event,
+silently dropping that plot from the next sync (visible as: hiding a
+group syncs everywhere, but showing it again only updates the plot you
+clicked on).
 """
 
 import dash
@@ -59,13 +71,6 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
         var triggeredId = ctx.triggered_id ||
             (triggered ? triggered.prop_id.split('.')[0] : null);
 
-        // Skip if this restyle was triggered by us (prevents infinite loop)
-        if (!window._legendSyncSkip) window._legendSyncSkip = new Set();
-        if (window._legendSyncSkip.has(triggeredId)) {{
-            window._legendSyncSkip.delete(triggeredId);
-            return [NO_UPDATE, NO_UPDATE];
-        }}
-
         // Locate the restyleData that fired
         var allIds = {all_ids_js};
         var args   = [{fn_args}];
@@ -106,6 +111,24 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
 
         if (!Object.keys(visMap).length) return [NO_UPDATE, NO_UPDATE];
 
+        // ── Keep only names whose visibility actually changed ───────────────
+        // Restyling the other plots below fires their own restyleData right
+        // back at this callback; by the time that echo arrives,
+        // _legendVisState already holds the new value, so it's recognised as
+        // "nothing changed" and dropped — no per-plot skip bookkeeping needed.
+        if (!window._legendVisState) window._legendVisState = {{}};
+        var changedMap = {{}};
+        var anyChanged = false;
+        for (var name in visMap) {{
+            var newVal = visMap[name];
+            if (window._legendVisState[name] !== newVal) {{
+                changedMap[name] = newVal;
+                window._legendVisState[name] = newVal;
+                anyChanged = true;
+            }}
+        }}
+        if (!anyChanged) return [NO_UPDATE, NO_UPDATE];
+
         // ── Apply visibility across all plots ───────────────────────────────
         // The source plot is included too: in dual (colour+shape) mode the
         // clickable colour legend entry is a neutral swatch trace while the
@@ -118,14 +141,13 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
             var idxList = [], visList = [];
             for (var j = 0; j < div.data.length; j++) {{
                 var tname = div.data[j].name;
-                if (tname in visMap) {{
+                if (tname in changedMap) {{
                     idxList.push(j);
-                    visList.push(visMap[tname]);
+                    visList.push(changedMap[tname]);
                 }}
             }}
 
             if (idxList.length) {{
-                window._legendSyncSkip.add(plotId);
                 Plotly.restyle(div, {{visible: visList}}, idxList);
             }}
         }});
@@ -134,8 +156,8 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
         if (!group) return [NO_UPDATE, NO_UPDATE];
 
         var hidden = new Set(((hiddenStore || {{}})[group] || []));
-        for (var name in visMap) {{
-            var vis = visMap[name];
+        for (var name in changedMap) {{
+            var vis = changedMap[name];
             if (vis === false || vis === 'legendonly') {{
                 hidden.add(name);
             }} else {{
@@ -190,6 +212,11 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
         var hiddenSet = new Set(((hiddenStore || {{}})[group || ''] || []).map(String));
         var allIds = {all_ids_apply_js};
 
+        // Keep the legend-click sync's own last-known-value cache consistent,
+        // so a plain restyle echo from this call reads as "unchanged" there
+        // too, instead of being mistaken for a fresh legend click.
+        if (!window._legendVisState) window._legendVisState = {{}};
+
         allIds.forEach(function(plotId) {{
             var div = getDiv(plotId);
             if (!div) return;
@@ -197,12 +224,12 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
             for (var j = 0; j < div.data.length; j++) {{
                 var tname = div.data[j].name;
                 if (!tname || tname === '__hover_highlight__') continue;
+                var val = hiddenSet.has(tname) ? 'legendonly' : true;
                 idxList.push(j);
-                visList.push(hiddenSet.has(tname) ? 'legendonly' : true);
+                visList.push(val);
+                window._legendVisState[tname] = val;
             }}
             if (idxList.length) {{
-                if (!window._legendSyncSkip) window._legendSyncSkip = new Set();
-                window._legendSyncSkip.add(plotId);
                 Plotly.restyle(div, {{visible: visList}}, idxList);
             }}
         }});
