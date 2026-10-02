@@ -55,7 +55,7 @@ def test_app_creation():
         
         # Test loading
         print("\nTesting data loading...")
-        from interactive_pca import load_eigenvec, load_annotation
+        from interactivePCA import load_eigenvec, load_annotation
         
         eigenvec, pcs, id_col = load_eigenvec(str(eigenvec_file), 'IID')
         print(f"✅ Loaded eigenvec: {len(eigenvec)} samples, {len(pcs)} PCs")
@@ -65,8 +65,8 @@ def test_app_creation():
         
         # Test app creation
         print("\nTesting app creation...")
-        from interactive_pca.app import create_app
-        from interactive_pca.args import parse_args
+        from interactivePCA.app import create_app
+        from interactivePCA.args import parse_args
         
         args = parse_args([
             '--eigenvec', str(eigenvec_file),
