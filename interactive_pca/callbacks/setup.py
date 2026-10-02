@@ -699,6 +699,23 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
         port = _relaunch_from(args, _dom(values, ids), all_arg_names())
         return {'go': True, 'port': port}, _starting_alert()
 
+    # ── About dialog (always) ────────────────────────────────────────────────
+    # Clientside: opening a static dialog needs no round trip to the server.
+    app.clientside_callback(
+        """
+        function(logo, close, isOpen) {
+            var t = window.dash_clientside.callback_context.triggered;
+            if (!t || !t.length) { return window.dash_clientside.no_update; }
+            return t[0].prop_id.split('.')[0] === 'app-logo';
+        }
+        """,
+        Output('about-modal', 'is_open'),
+        Input('app-logo', 'n_clicks'),
+        Input('about-close', 'n_clicks'),
+        State('about-modal', 'is_open'),
+        prevent_initial_call=True,
+    )
+
     # ── Reload poller (always) ───────────────────────────────────────────────
     app.clientside_callback(
         POLLER_JS,
