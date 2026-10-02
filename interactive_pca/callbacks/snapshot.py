@@ -52,13 +52,24 @@ def register_snapshot_callback(app, show_time_plot=True):
             var pcaH   = px('pca-plot',        'height');
             var timeH  = px('time-histogram',  'height');
             var mapH   = px('pca-map-plot',    'height');
-            // Use measured values if available; fall back to equal/default split
-            var colCss = (leftW && rightW)
-                ? '#left-col{flex:0 0 '+leftW+'px}#right-col{flex:0 0 '+rightW+'px}'
-                : '#left-col,#right-col{flex:1 1 0}';
-            var pcaFlex  = pcaH  ? 'flex:0 0 '+pcaH+'px'  : 'flex:0 0 60%';
-            var timeFlex = timeH ? 'flex:0 0 '+timeH+'px' : 'flex:1 1 auto';
-            var mapFlex  = mapH  ? 'flex:0 0 '+mapH+'px'  : 'flex:0 0 60%';
+            var tblH   = px('pca-annotation-table', 'height');
+            // Pane splits are captured as a PERCENTAGE of the two measured
+            // panes, not a fixed pixel size for both — a browser window
+            // hardly ever matches the exact height/width the snapshot was
+            // taken at, and two fixed-pixel panes stacked in a flex column
+            // don't grow to fill the difference, leaving blank space (or
+            // overflow) below/beside them. Only one side of each split is
+            // ever fixed (as a %); the other always grows to absorb
+            // whatever's left (flex:1 1 auto), so the pair always fills
+            // its container exactly, at any window size.
+            function splitPct(a, b, fallback) {
+                return (a && b) ? (a / (a + b) * 100).toFixed(2) + '%' : fallback;
+            }
+            var colCss = '#left-col{flex:0 0 '  + splitPct(leftW, rightW, '50%') + '}' +
+                         '#right-col{flex:1 1 auto}';
+            var pcaFlex  = 'flex:0 0 ' + splitPct(pcaH, timeH, '60%');
+            var timeFlex = 'flex:1 1 auto';
+            var mapFlex  = 'flex:0 0 ' + splitPct(mapH, tblH, '60%');
 
             // ── capture figures ─────────────────────────────────────────
             // customdata (sample id per point) is kept on every trace —
