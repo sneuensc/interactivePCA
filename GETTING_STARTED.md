@@ -5,7 +5,7 @@
 ### Step 1: Install the package
 
 ```bash
-cd /path/to/interactive-pca
+cd /path/to/interactivePCA
 pip install -e .
 ```
 
@@ -43,7 +43,7 @@ print(f"Loaded annotation with {len(annotation.columns)} columns")
 Run the Dash app from the command line:
 
 ```bash
-interactive-pca --eigenvec data/samples.eigenvec \
+interactivePCA --eigenvec data/samples.eigenvec \
                  --annotation data/samples.anno \
                  --latitude Latitude \
                  --longitude Longitude \
@@ -181,7 +181,7 @@ The package is organized into modules:
 - **utils.py** - Utility functions for text processing and data manipulation
 - **args.py** - Command-line argument parser
 - **data_loader.py** - Data loading and preprocessing functions
-- **cli.py** - Command-line entry point (`interactive-pca`)
+- **cli.py** - Command-line entry point (`interactivePCA`)
 - **app.py** - Dash application factory
 - **plots.py** - Plot generation helpers
 - **layouts/** - Layout creation for main UI panels
@@ -191,7 +191,7 @@ The package is organized into modules:
 ## Next Steps
 
 1. **Explore the data**: Use data loaders and utilities to inspect your inputs
-2. **Run the dashboard**: Start with `interactive-pca --eigenvec ...` and add optional panels via annotation/map/time args
+2. **Run the dashboard**: Start with `interactivePCA --eigenvec ...` and add optional panels via annotation/map/time args
 3. **Customize behavior**: Edit `interactive_pca/layouts/__init__.py` and `interactive_pca/callbacks/`
 4. **Contribute**: Submit improvements via pull requests
 

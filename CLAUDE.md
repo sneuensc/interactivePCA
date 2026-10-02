@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`interactive-pca` is a Python package that serves a Dash web app for interactively exploring PCA/MDS results from population-genetics data. It links four panels — a 2D/3D PCA scatter plot, a geographic map, a time plot, and an annotation table — so selection, hover, legend toggles, and styling stay synchronized across all views. Primary use is ancient-DNA analysis (e.g. AADR-format eigenvec + annotation files).
+`interactivePCA` is a Python package that serves a Dash web app for interactively exploring PCA/MDS results from population-genetics data. It links four panels — a 2D/3D PCA scatter plot, a geographic map, a time plot, and an annotation table — so selection, hover, legend toggles, and styling stay synchronized across all views. Primary use is ancient-DNA analysis (e.g. AADR-format eigenvec + annotation files).
 
 ## Commands
 
@@ -17,12 +17,12 @@ pip install -e ".[dev]"
 Run the app (opens on http://localhost:8050):
 
 ```bash
-interactive-pca                                           # setup wizard (no data given)
-interactive-pca --eigenvec data/samples.eigenvec          # minimal (PCA only)
-interactive-pca --eigenvec data/samples.eigenvec \
+interactivePCA                                           # setup wizard (no data given)
+interactivePCA --eigenvec data/samples.eigenvec          # minimal (PCA only)
+interactivePCA --eigenvec data/samples.eigenvec \
                 --annotation data/samples.anno \
                 --latitude Lat. --longitude Long. --time Date   # all panels
-interactive-pca --help                                    # full option list
+interactivePCA --help                                    # full option list
 ```
 
 Launching **without `--eigenvec`** starts the app as a **tab shell** (PCA /
@@ -67,5 +67,5 @@ The flow is `cli.py:main` → `parse_args` (args.py) → `app.py:create_app` →
 
 ## Gotchas
 
-- Packaging is defined entirely in `pyproject.toml` (setuptools backend); there is no `setup.py`. Dependencies, metadata, entry point (`interactive-pca = interactive_pca.cli:main`), and package discovery (`interactive_pca*` only) all live there.
+- Packaging is defined entirely in `pyproject.toml` (setuptools backend); there is no `setup.py`. Dependencies, metadata, entry point (`interactivePCA = interactive_pca.cli:main`), and package discovery (`interactive_pca*` only) all live there.
 - **Data stays out of git.** `.gitignore` ignores everything matching `data*`, so `data/` (a symlink to `../interactivePCA/data/`), `data-lucas/`, and any other `data`-prefixed folder are excluded. Sample data is not present on a fresh checkout and must not be committed — name new analysis data directories with a `data` prefix to keep them off GitHub automatically.

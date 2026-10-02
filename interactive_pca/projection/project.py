@@ -154,7 +154,7 @@ def combine(panel, projected, reference_label='reference', target_label='project
     """Stack reference scores and projected scores into one annotated table.
 
     The result is a single headed file carrying ids, dimensions and annotation
-    columns — exactly what ``interactive-pca`` reads without a second file.
+    columns — exactly what ``interactivePCA`` reads without a second file.
     """
     ref = panel.scores.copy()
     ref['set'] = reference_label

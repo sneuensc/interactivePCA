@@ -3,16 +3,16 @@ Reference-panel PCA and least-squares projection.
 
 Two halves, matching the two command-line entry points:
 
-``build_panel`` / ``interactive-pca-refbuild``
+``build_panel`` / ``interactivePCA-refbuild``
     Compute a PCA from high-coverage reference genotypes once, and freeze
     everything a later projection needs (SNPs with allele orientation,
     per-SNP centring and scaling, loadings, reference scores).
 
-``project_plink`` / ``interactive-pca-project``
+``project_plink`` / ``interactivePCA-project``
     Place new — typically low-coverage, pseudo-haploid — samples into that
     fixed space by least squares, using only the SNPs each sample has.
 
-The combined output is a single headed table that ``interactive-pca`` reads
+The combined output is a single headed table that ``interactivePCA`` reads
 directly, with a ``set`` column separating reference from projected samples.
 """
 

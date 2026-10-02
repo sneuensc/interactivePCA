@@ -1,9 +1,9 @@
 """
 Command-line entry points for the reference panel and the projection.
 
-``interactive-pca-refbuild``  build a panel from high-coverage genotypes (rare,
+``interactivePCA-refbuild``  build a panel from high-coverage genotypes (rare,
                               heavy — needs the full reference genotypes)
-``interactive-pca-project``   project new samples onto a panel (routine, light)
+``interactivePCA-project``   project new samples onto a panel (routine, light)
 """
 
 import argparse
@@ -24,7 +24,7 @@ def _setup_logging(verbose):
 
 def refbuild_main(argv=None):
     parser = argparse.ArgumentParser(
-        prog='interactive-pca-refbuild',
+        prog='interactivePCA-refbuild',
         description='Build a reference PCA panel from high-coverage genotypes.')
     parser.add_argument('--bfile', required=True, metavar='PREFIX',
                         help='PLINK prefix of the reference set (.bed/.bim/.fam).')
@@ -66,14 +66,14 @@ def refbuild_main(argv=None):
 
 def project_main(argv=None):
     parser = argparse.ArgumentParser(
-        prog='interactive-pca-project',
+        prog='interactivePCA-project',
         description='Project samples onto a reference panel by least squares.')
     parser.add_argument('--panel', required=True, metavar='DIR',
-                        help='Panel directory from interactive-pca-refbuild.')
+                        help='Panel directory from interactivePCA-refbuild.')
     parser.add_argument('--bfile', required=True, metavar='PREFIX',
                         help='PLINK prefix of the samples to project.')
     parser.add_argument('--out', required=True, metavar='FILE',
-                        help='Output table, ready for interactive-pca.')
+                        help='Output table, ready for interactivePCA.')
     parser.add_argument('--ridge', type=float, default=0.0,
                         help='L2 penalty for samples with few SNPs (default: 0).')
     parser.add_argument('--keep-ambiguous', action='store_true',
@@ -112,7 +112,7 @@ def project_main(argv=None):
     out = scores if args.projected_only else combine(panel, scores)
     out.to_csv(args.out, sep='\t', index=False, na_rep='NA')
     logging.info('Wrote %d rows to %s', len(out), args.out)
-    logging.info('Load it with:  interactive-pca --eigenvec %s', args.out)
+    logging.info('Load it with:  interactivePCA --eigenvec %s', args.out)
     return 0
 
 
