@@ -19,7 +19,7 @@ Import and use the functions directly in your Python code:
 
 ```python
 import logging
-from interactive_pca import (
+from interactivePCA import (
     load_eigenvec,
     load_annotation,
     parse_args,
@@ -61,7 +61,7 @@ Create a notebook and import the package:
 
 ```python
 import pandas as pd
-from interactive_pca import (
+from interactivePCA import (
     load_eigenvec,
     load_annotation,
 )
@@ -101,7 +101,7 @@ print(annotation.head())
 ```python
 import logging
 import pandas as pd
-from interactive_pca import (
+from interactivePCA import (
     load_eigenvec,
     load_annotation,
     merge_data,
@@ -151,7 +151,7 @@ pytest tests/
 ### Running Tests with Coverage
 
 ```bash
-pytest tests/ --cov=interactive_pca --cov-report=html
+pytest tests/ --cov=interactivePCA --cov-report=html
 ```
 
 ### Code Quality
@@ -159,19 +159,19 @@ pytest tests/ --cov=interactive_pca --cov-report=html
 Format code with Black:
 
 ```bash
-black interactive_pca/
+black interactivePCA/
 ```
 
 Sort imports with isort:
 
 ```bash
-isort interactive_pca/
+isort interactivePCA/
 ```
 
 Check with flake8:
 
 ```bash
-flake8 interactive_pca/
+flake8 interactivePCA/
 ```
 
 ## Architecture
@@ -192,7 +192,7 @@ The package is organized into modules:
 
 1. **Explore the data**: Use data loaders and utilities to inspect your inputs
 2. **Run the dashboard**: Start with `interactivePCA --eigenvec ...` and add optional panels via annotation/map/time args
-3. **Customize behavior**: Edit `interactive_pca/layouts/__init__.py` and `interactive_pca/callbacks/`
+3. **Customize behavior**: Edit `interactivePCA/layouts/__init__.py` and `interactivePCA/callbacks/`
 4. **Contribute**: Submit improvements via pull requests
 
 ## Troubleshooting

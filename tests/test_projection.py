@@ -12,10 +12,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from interactive_pca.projection import (
+from interactivePCA.projection import (
     build_panel, combine, harmonise, load_panel, project_plink,
 )
-from interactive_pca.projection.plink import read_bim, read_dosages
+from interactivePCA.projection.plink import read_bim, read_dosages
 
 # dosage of A1 -> 2-bit code (inverse of plink._CODE_TO_DOSAGE)
 _DOSAGE_TO_CODE = {2: 0b00, 1: 0b10, 0: 0b11, -9: 0b01}
