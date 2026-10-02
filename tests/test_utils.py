@@ -1,9 +1,9 @@
 """
-Tests for interactive_pca package.
+Tests for interactivePCA package.
 """
 
 import pytest
-from interactive_pca.utils import (
+from interactivePCA.utils import (
     make_unique_abbr,
     find_incrementing_prefix_series,
     is_notebook,

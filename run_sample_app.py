@@ -5,8 +5,8 @@ Run this and open http://localhost:8050 in your browser to see the plots.
 
 import tempfile
 import os
-from interactive_pca import create_app
-from interactive_pca.args import parse_args
+from interactivePCA import create_app
+from interactivePCA.args import parse_args
 
 def create_sample_data():
     """Create sample test files with more realistic data."""

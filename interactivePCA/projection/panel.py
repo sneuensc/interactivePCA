@@ -41,7 +41,7 @@ import pandas as pd
 
 from .plink import iter_dosage_blocks, read_bim, read_fam
 
-FORMAT = 'interactive-pca-refpanel'
+FORMAT = 'interactivePCA-refpanel'
 FORMAT_VERSION = 1
 
 
