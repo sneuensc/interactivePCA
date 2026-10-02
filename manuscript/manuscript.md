@@ -16,7 +16,7 @@ We present **interactivePCA**, a browser-based application that links up to five
 Lasso selections, hover information, and aesthetic styling propagate instantly across all panels, enabling cohesive visual interrogation of population structure, migration, and admixture.
 interactivePCA is implemented in Python/Dash, requires no server infrastructure, and accepts the PLINK eigenvector format directly.
 
-**Availability:** <https://github.com/sneuensc/interactive-pca>  
+**Availability:** <https://github.com/sneuensc/interactivePCA>  
 **Contact:** samuel.neuenschwander@unil.ch
 
 ---
@@ -44,7 +44,7 @@ All computation is performed at startup; once the application is running, every 
 **Input.** The tool accepts two files: (i) a PLINK-format eigenvector file (`--eigenvec`) containing any number of principal components, and (ii) an optional tab-separated annotation file (`--annotation`) whose column roles — identifier, latitude, longitude, chronological date, grouping variables — are specified via command-line flags or auto-detected by column name.
 Pre-computed MDS coordinates are equally accepted.
 
-**Architecture.** The Dash application is launched via a single CLI command (`interactive-pca --eigenvec ... --annotation ...`) and served on localhost, ensuring that confidential genomic data never leave the analyst's machine.
+**Architecture.** The Dash application is launched via a single CLI command (`interactivePCA --eigenvec ... --annotation ...`) and served on localhost, ensuring that confidential genomic data never leave the analyst's machine.
 The layout consists of two resizable panes: the left pane holds the PCA/MDS scatter plot and the time scatter plot (vertically stacked, with a draggable divider); the right pane holds the geographic map and a tabbed panel containing the annotation table, a hover-detail view, and the pandas query filter.
 A clientside JavaScript callback propagates hover and selection events across all three plots in real time without server round-trips.
 
@@ -91,7 +91,7 @@ The tool is designed to integrate directly into existing PLINK/EIGENSOFT workflo
 ## Availability and requirements
 
 - **Project name:** interactivePCA
-- **Project home page:** <https://github.com/sneuensc/interactive-pca>
+- **Project home page:** <https://github.com/sneuensc/interactivePCA>
 - **Operating system:** Platform-independent (tested on macOS and Linux)
 - **Programming language:** Python ≥ 3.8
 - **Other requirements:** Dash ≥ 2.0, Plotly ≥ 5.0, pandas ≥ 1.3, dash-ag-grid ≥ 2.0
