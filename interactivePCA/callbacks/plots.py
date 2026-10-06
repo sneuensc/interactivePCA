@@ -324,15 +324,24 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('symbol-aesthetics-store', 'data'),
             Input('save-trigger-store', 'data'),
             Input('map-type-toggle', 'value'),
+            Input('settings2-map-lat', 'value'),
+            Input('settings2-map-lon', 'value'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             State('selection-store', 'data'),
             State('map-view-store', 'data'),
         )
         def update_map_plot(group, aesthetics_store, group_symbol, symbol_store, _save_tick,
-                            map_type, hover_detailed, selected_cols, selection_store, map_view):
-            if ANNOTATION_LAT is None or ANNOTATION_LONG is None:
-                return {}
+                            map_type, lat_col, lon_col, hover_detailed, selected_cols, selection_store, map_view):
+            # lat_col/lon_col come from the Settings 2 tab's live column pickers
+            # (layouts/__init__.py:create_settings2_tab), prefilled with
+            # ANNOTATION_LAT/ANNOTATION_LONG — falling back to those here too in
+            # case the dropdowns are ever cleared. Either can still be None (no
+            # --latitude/--longitude given and nothing picked yet); the map
+            # builders already degrade to a "coordinates not available"
+            # placeholder figure in that case rather than erroring.
+            lat_col = lat_col or ANNOTATION_LAT
+            lon_col = lon_col or ANNOTATION_LONG
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
             aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
             gs = group_symbol if group_symbol and group_symbol != 'none' else None
@@ -346,8 +355,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 group=group,
                 aesthetics_tuple=aesthetics_tuple,
                 legend=False,
-                lat_col=ANNOTATION_LAT,
-                lon_col=ANNOTATION_LONG,
+                lat_col=lat_col,
+                lon_col=lon_col,
                 group_symbol=gs,
                 symbol_aest_tuple=sym_tuple,
             )
@@ -411,8 +420,6 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         g['lataxis'] = {**(g.get('lataxis') or {}), 'range': [lat0, lat1]}
 
             return fig_dict
-
-    show_time_plot = show_time_plot and ANNOTATION_TIME is not None and ANNOTATION_TIME in df.columns
 
     # Callback for time histogram updates (grouping, mode, and selection)
     if show_time_plot:

@@ -11,6 +11,7 @@ from .hover_sync import register_hover_sync_callbacks
 from .hover_details import register_hover_details_callback
 from .legend_sync import register_legend_sync_callbacks
 from .session import register_session_callbacks
+from .settings2 import register_settings2_callbacks
 
 
 def register_all_callbacks(app, args, df, pcs, annotation_desc,
@@ -28,19 +29,13 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
         ANNOTATION_LAT: Latitude column name
         ANNOTATION_LONG: Longitude column name
     """
+    # The map/time panels (and their callbacks) exist whenever annotation data
+    # is loaded, regardless of whether --latitude/--longitude/--time happen to
+    # already resolve — see app.py's matching comment. Which columns actually
+    # feed them, if any, is a live pick via the Settings 2 tab.
     show_annotation_table = annotation_desc is not None
-    show_map_plot = (
-        show_annotation_table
-        and ANNOTATION_LAT is not None
-        and ANNOTATION_LONG is not None
-        and ANNOTATION_LAT in df.columns
-        and ANNOTATION_LONG in df.columns
-    )
-    show_time_plot = (
-        show_annotation_table
-        and ANNOTATION_TIME is not None
-        and ANNOTATION_TIME in df.columns
-    )
+    show_map_plot = show_annotation_table
+    show_time_plot = show_annotation_table
 
     register_selection_callbacks(
         app,
@@ -76,6 +71,12 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
     register_session_callbacks(
         app,
         args,
+        show_map_plot=show_map_plot,
+        show_time_plot=show_time_plot,
+        show_annotation_table=show_annotation_table,
+    )
+    register_settings2_callbacks(
+        app,
         show_map_plot=show_map_plot,
         show_time_plot=show_time_plot,
         show_annotation_table=show_annotation_table,
