@@ -191,8 +191,11 @@ def create_app(args):
         # the PCA itself, and the table only ever see this subset.
         if args.subsetID:
             if os.path.isfile(args.subsetID):
-                with open(args.subsetID, 'r') as f:
-                    keep_ids = set(line.rstrip('\n') for line in f)
+                try:
+                    with open(args.subsetID, 'r') as f:
+                        keep_ids = set(line.rstrip('\n') for line in f)
+                except (OSError, UnicodeDecodeError) as exc:
+                    raise ValueError(f"Could not read --subsetID file '{args.subsetID}': {exc}") from exc
             else:
                 # Each ";"- or ","-separated token is matched via fnmatch, so
                 # a plain ID (no wildcard chars) still keeps itself exactly,
@@ -227,8 +230,11 @@ def create_app(args):
         # Initialize selected IDs
         if args.selectedID:
             if os.path.isfile(args.selectedID):
-                with open(args.selectedID, 'r') as f:
-                    init_selected_ids = [line.rstrip('\n') for line in f]
+                try:
+                    with open(args.selectedID, 'r') as f:
+                        init_selected_ids = [line.rstrip('\n') for line in f]
+                except (OSError, UnicodeDecodeError) as exc:
+                    raise ValueError(f"Could not read --selectedID file '{args.selectedID}': {exc}") from exc
                 valid_ids = set(df['id'].tolist())
                 init_selected_ids = [sid for sid in init_selected_ids if sid in valid_ids]
             else:
@@ -322,7 +328,8 @@ def create_app(args):
         external_stylesheets=[dbc.themes.BOOTSTRAP],
         suppress_callback_exceptions=True
     )
-    
+    app.title = 'interactivePCA'
+
     # Build layout
     layout_data = create_layout(
         args, df, pcs,
@@ -334,8 +341,7 @@ def create_app(args):
         init_session=init_session,
     )
     app.layout = layout_data['layout']
-    tab_content_map = layout_data['tab_content_map']
-    
+
     # Register tab switching callback using clientside callback for better performance
     app.clientside_callback(
         """

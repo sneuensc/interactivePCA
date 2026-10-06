@@ -38,11 +38,6 @@ def _dom(values, ids):
 
 
 # ── Small helpers ────────────────────────────────────────────────────────────
-def _read_columns(path, whitespace=False):
-    sep = r"\s+" if whitespace else "\t"
-    return list(pd.read_csv(path, sep=sep, nrows=0).columns)
-
-
 def _guess(columns, *needles):
     """Case-insensitive best-guess column for a parameter (e.g. 'lat') — only an
     exact name match (a column literally called "lat" or "Lat"), never a loose
@@ -416,7 +411,11 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             # Coordinates only — any extra columns in the file are left for the
             # Annotation tab to load explicitly (with lat/long/time chosen there).
             dom['ignore_embedded_annotation'] = True
-            overlay = EIGENVEC_FIELDS + settings_arg_names() + ['ignore_embedded_annotation']
+            # 'session' is excluded here even though it's one of EIGENVEC_FIELDS:
+            # this is the plain "Load" button, not "Load session" (below) — a
+            # path left typed in the Session field (but not submitted via its
+            # own button) must not silently ride along on an unrelated Load.
+            overlay = [f for f in EIGENVEC_FIELDS if f != 'session'] + settings_arg_names() + ['ignore_embedded_annotation']
             port = _relaunch_from(args, dom, overlay)
             return {'go': True, 'port': port}, _starting_alert()
 
@@ -666,8 +665,10 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
                 # eigenvec, and carry over the eigenvec fields too in case this
                 # is somehow the first relaunch (before the PCA tab's own Load).
                 dom['ignore_embedded_annotation'] = False
-                overlay = (EIGENVEC_FIELDS + ANNOTATION_DEPENDENT + settings_arg_names()
-                          + ['ignore_embedded_annotation'])
+                # 'session' excluded for the same reason as pca_load above — this
+                # is the Annotation tab's own Load button, not "Load session".
+                overlay = ([f for f in EIGENVEC_FIELDS if f != 'session'] + ANNOTATION_DEPENDENT
+                          + settings_arg_names() + ['ignore_embedded_annotation'])
                 port = _relaunch_from(args, dom, overlay)
                 return {'go': True, 'port': port}, _starting_alert()
             annotation = dom.get('annotation')

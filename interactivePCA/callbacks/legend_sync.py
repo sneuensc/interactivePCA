@@ -29,6 +29,71 @@ import dash
 from dash import Input, Output, State
 
 
+def _register_apply_callback(app, plot_ids):
+    """Apply hidden-groups-store to all plot divs when the store changes from
+    a source other than a legend click (e.g. Status dropdown in the table).
+    Registered regardless of how many plots are active — even a single plot
+    needs to react to the table's Status column, which is the only other
+    writer of hidden-groups-store.
+    """
+    all_ids_apply_js = '[' + ', '.join(f"'{p}'" for p in plot_ids) + ']'
+    apply_js = f"""
+    function(hiddenStore, group) {{
+        var NO_UPDATE = window.dash_clientside.no_update;
+
+        // Skip if the store was just written by a legend click — the plots
+        // are already up to date from the legend_sync restyle.
+        if (window._hiddenStoreFromLegend) {{
+            window._hiddenStoreFromLegend = false;
+            return NO_UPDATE;
+        }}
+
+        function getDiv(id) {{
+            var el = document.getElementById(id);
+            if (!el) return null;
+            if (el.data) return el;
+            var inner = el.querySelector && el.querySelector('.js-plotly-plot');
+            return (inner && inner.data) ? inner : null;
+        }}
+
+        var hiddenSet = new Set(((hiddenStore || {{}})[group || ''] || []).map(String));
+        var allIds = {all_ids_apply_js};
+
+        // Keep the legend-click sync's own last-known-value cache consistent,
+        // so a plain restyle echo from this call reads as "unchanged" there
+        // too, instead of being mistaken for a fresh legend click.
+        if (!window._legendVisState) window._legendVisState = {{}};
+
+        allIds.forEach(function(plotId) {{
+            var div = getDiv(plotId);
+            if (!div) return;
+            var idxList = [], visList = [];
+            for (var j = 0; j < div.data.length; j++) {{
+                var tname = div.data[j].name;
+                if (!tname || tname === '__hover_highlight__') continue;
+                var val = hiddenSet.has(tname) ? 'legendonly' : true;
+                idxList.push(j);
+                visList.push(val);
+                window._legendVisState[tname] = val;
+            }}
+            if (idxList.length) {{
+                Plotly.restyle(div, {{visible: visList}}, idxList);
+            }}
+        }});
+
+        return NO_UPDATE;
+    }}
+    """
+
+    app.clientside_callback(
+        apply_js,
+        Output('hover-sync-dummy', 'data', allow_duplicate=True),
+        Input('hidden-groups-store', 'data'),
+        State('dropdown-group', 'value'),
+        prevent_initial_call=True
+    )
+
+
 def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
 
     # Reset hidden-groups-store entry for the new group whenever the dropdown
@@ -49,13 +114,39 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
             return new_store
         return dash.no_update
 
+    # window._legendVisState is keyed by trace NAME only (see module docstring),
+    # so a name that was hidden under one group (e.g. 'Female' under 'Sex') and
+    # happens to reappear under a different group (e.g. 'Female' under 'Status')
+    # would otherwise read as "already at that visibility" and get silently
+    # dropped from the next sync. Clearing the cache whenever the grouping
+    # variable changes — the one event after which every trace name is
+    # genuinely fresh — avoids that stale cross-group collision.
+    app.clientside_callback(
+        """
+        function(_group) {
+            window._legendVisState = {};
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('hover-sync-dummy', 'data', allow_duplicate=True),
+        Input('dropdown-group', 'value'),
+        prevent_initial_call=True,
+    )
+
     plot_ids = ['pca-plot']
     if show_map_plot:
         plot_ids.append('pca-map-plot')
     if show_time_plot:
         plot_ids.append('time-histogram')
 
+    # Cross-plot legend-click sync only makes sense with 2+ plots — skip
+    # registering it (and the name-collision cache above still applies, it's
+    # harmless with one plot) when there's nothing else to sync to. The
+    # apply_js callback below (hidden-groups-store -> plots, e.g. from the
+    # table's Status column) still matters with a single plot, so it is
+    # registered unconditionally further down.
     if len(plot_ids) < 2:
+        _register_apply_callback(app, plot_ids)
         return
 
     all_ids_js = '[' + ', '.join(f"'{p}'" for p in plot_ids) + ']'
@@ -187,61 +278,4 @@ def register_legend_sync_callbacks(app, show_map_plot=True, show_time_plot=True)
         prevent_initial_call=True
     )
 
-    # Apply hidden-groups-store to all plot divs when the store changes from
-    # a source other than a legend click (e.g. Status dropdown in the table).
-    all_ids_apply_js = '[' + ', '.join(f"'{p}'" for p in plot_ids) + ']'
-    apply_js = f"""
-    function(hiddenStore, group) {{
-        var NO_UPDATE = window.dash_clientside.no_update;
-
-        // Skip if the store was just written by a legend click — the plots
-        // are already up to date from the legend_sync restyle.
-        if (window._hiddenStoreFromLegend) {{
-            window._hiddenStoreFromLegend = false;
-            return NO_UPDATE;
-        }}
-
-        function getDiv(id) {{
-            var el = document.getElementById(id);
-            if (!el) return null;
-            if (el.data) return el;
-            var inner = el.querySelector && el.querySelector('.js-plotly-plot');
-            return (inner && inner.data) ? inner : null;
-        }}
-
-        var hiddenSet = new Set(((hiddenStore || {{}})[group || ''] || []).map(String));
-        var allIds = {all_ids_apply_js};
-
-        // Keep the legend-click sync's own last-known-value cache consistent,
-        // so a plain restyle echo from this call reads as "unchanged" there
-        // too, instead of being mistaken for a fresh legend click.
-        if (!window._legendVisState) window._legendVisState = {{}};
-
-        allIds.forEach(function(plotId) {{
-            var div = getDiv(plotId);
-            if (!div) return;
-            var idxList = [], visList = [];
-            for (var j = 0; j < div.data.length; j++) {{
-                var tname = div.data[j].name;
-                if (!tname || tname === '__hover_highlight__') continue;
-                var val = hiddenSet.has(tname) ? 'legendonly' : true;
-                idxList.push(j);
-                visList.push(val);
-                window._legendVisState[tname] = val;
-            }}
-            if (idxList.length) {{
-                Plotly.restyle(div, {{visible: visList}}, idxList);
-            }}
-        }});
-
-        return NO_UPDATE;
-    }}
-    """
-
-    app.clientside_callback(
-        apply_js,
-        Output('hover-sync-dummy', 'data', allow_duplicate=True),
-        Input('hidden-groups-store', 'data'),
-        State('dropdown-group', 'value'),
-        prevent_initial_call=True
-    )
+    _register_apply_callback(app, plot_ids)

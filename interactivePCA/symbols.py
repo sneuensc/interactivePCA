@@ -30,13 +30,3 @@ MAP_SYMBOLS = {
 # Symbols that render faithfully in the 3D scatter without being remapped.
 # (plots._SCATTER3D_SYMBOL_MAP remaps triangle-up/-down/star to other shapes.)
 SCATTER3D_SYMBOLS = {'circle', 'square', 'diamond', 'cross', 'x'}
-
-
-def is_map_compatible(symbol):
-    """Whether *symbol* renders as itself on the geographic map."""
-    return symbol in MAP_SYMBOLS
-
-
-def is_3d_compatible(symbol):
-    """Whether *symbol* renders as itself in the 3D scatter (not remapped)."""
-    return symbol in SCATTER3D_SYMBOLS

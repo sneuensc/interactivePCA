@@ -98,8 +98,15 @@ def main(args=None):
         logging.error(f"App module error: {e}")
         logging.error("Please ensure all dependencies are installed: pip install -e .")
         sys.exit(1)
+    except (ValueError, OSError) as e:
+        # Bad/missing/malformed input files (eigenvec, annotation, subsetID,
+        # selectedID, ...) — a clean error message beats a raw traceback.
+        logging.error(f"Could not start: {e}")
+        sys.exit(1)
 
-    if parsed_args.eigenvec:
+    # Matches app.py:create_app's own decision of which UI actually gets
+    # served: --setup forces the loader shell even when --eigenvec is given.
+    if parsed_args.eigenvec and not parsed_args.setup:
         print_banner(parsed_args)
     else:
         print_setup_banner(url)

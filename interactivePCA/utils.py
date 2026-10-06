@@ -3,7 +3,6 @@ Utility functions for text processing and data cleaning.
 """
 
 import re
-import json
 import math
 import difflib
 import fnmatch
@@ -77,26 +76,30 @@ def nice_bounds(lo, hi, step):
 def make_unique_abbr(cur_list, max_length=3):
     """
     Abbreviate a list of strings to a maximum length, preserving uniqueness.
-    
+
     Args:
         cur_list: List of strings to abbreviate
-        max_length: Maximum length of abbreviations (default 3)
-    
+        max_length: Maximum length of abbreviations (default 3). 0 (or any
+            non-positive value) means no abbreviation — names are only
+            cleaned and disambiguated, never truncated.
+
     Returns:
         List of unique abbreviations
     """
+    no_limit = max_length is None or max_length <= 0
+
     clean_re = re.compile(r'[^a-zA-Z0-9 ]')
     space_re = re.compile(r' ')
 
     # Clean: remove special characters, then replace spaces with underscores
     cleaned = [space_re.sub('_', clean_re.sub('', str(elem))) for elem in cur_list]
 
-    # Base abbreviation: truncate to max_length.
-    bases = [elem[:max_length].rstrip('_') for elem in cleaned]
+    # Base abbreviation: truncate to max_length (unless no_limit).
+    bases = cleaned if no_limit else [elem[:max_length].rstrip('_') for elem in cleaned]
 
-    # Make unique while never exceeding max_length: when a numeric suffix is
-    # needed to disambiguate, the prefix is shortened so that
-    # len(prefix) + len(suffix) <= max_length.
+    # Make unique: when a numeric suffix is needed to disambiguate, the prefix
+    # is shortened so that len(prefix) + len(suffix) <= max_length — unless
+    # no_limit, in which case the suffix is simply appended uncut.
     used = set()
     unique_abbr = []
     for base in bases:
@@ -107,8 +110,11 @@ def make_unique_abbr(cur_list, max_length=3):
         n = 1
         while True:
             suffix = str(n)
-            prefix_len = max(0, max_length - len(suffix))
-            candidate = (base[:prefix_len].rstrip('_') + suffix)
+            if no_limit:
+                candidate = base + suffix
+            else:
+                prefix_len = max(0, max_length - len(suffix))
+                candidate = (base[:prefix_len].rstrip('_') + suffix)
             if candidate not in used:
                 break
             n += 1
@@ -273,32 +279,6 @@ def tuple_to_dict_of_dicts(t):
         return val
 
     return {k: _denormalize(v) for k, v in t}
-
-
-def save_dict_of_dicts_to_json(data, filename):
-    """
-    Save aesthetics dict to JSON file.
-    
-    Args:
-        data: Dictionary to save
-        filename: Output file path
-    """
-    with open(filename, 'w') as f:
-        json.dump(data, f, indent=2)
-
-
-def read_dict_of_dicts_from_json(filename):
-    """
-    Read aesthetics dict from JSON file.
-    
-    Args:
-        filename: Input file path
-    
-    Returns:
-        Dictionary loaded from file
-    """
-    with open(filename, 'r') as f:
-        return json.load(f)
 
 
 def is_notebook():

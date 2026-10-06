@@ -166,7 +166,10 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                 var clearData = {{x: [[]], y: [[]], hovertemplate: '<extra></extra>'}};
                 if (plotDiv.data[hlIdx].z !== undefined) clearData.z = [[]];
                 Plotly.restyle(plotDiv, clearData, [hlIdx]);
-                try {{ Plotly.Fx.hover(plotDiv, []); }} catch(e) {{}}
+                try {{
+                    window._hoverSyncSkip = plotId;
+                    Plotly.Fx.hover(plotDiv, []);
+                }} catch(e) {{}}
             }}
         }}
 
@@ -304,6 +307,11 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                 if (fullTrace) fullTrace.hovertemplate = minTpl;
 
                 try {{
+                    // Break feedback loop caused by our own simulated hover —
+                    // same guard the map branch above already uses, applied
+                    // here too so a scatter/scattergl plot's own echo of this
+                    // Fx.hover call isn't mistaken for a fresh real hover.
+                    window._hoverSyncSkip = plotId;
                     Plotly.Fx.hover(plotDiv, [{{curveNumber: foundTrace, pointNumber: foundPoint}}]);
                 }} catch(e) {{}}
 

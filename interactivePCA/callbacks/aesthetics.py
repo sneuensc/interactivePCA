@@ -616,9 +616,6 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
     def save_aesthetics_edits(n_clicks, aesthetics_store, symbol_store, group, group_symbol,
                               color_values, color_ids, row_data, virtual_row_data, symbol_row_data,
                               symbol_virtual_row_data, colorscale_values):
-        
-        print(f"save_aesthetics_edits called with n_clicks={n_clicks}, group={group}, group_symbol={group_symbol}")
-        
         """Save aesthetics edits to store when Save button is clicked"""
         has_color = bool(group and group != 'none')
         has_shape = bool(group_symbol and group_symbol != 'none')
@@ -805,7 +802,12 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 if row.get('Group') not in ('default', 'unselected')
             ]
 
-        # Update marker-aesthetics-store
+        # Update marker-aesthetics-store. Re-inserting (rather than assigning
+        # over an existing key) moves this group to the end of dict iteration
+        # order — get_aesthetics_for_group relies on that order to find the
+        # most-recently-saved group's default/unselected aesthetics to carry
+        # over into a brand new group.
+        aesthetics_store.pop(group, None)
         aesthetics_store[group] = group_aesthetics
         logging.info(f"Aesthetics saved for group '{group}'")
 

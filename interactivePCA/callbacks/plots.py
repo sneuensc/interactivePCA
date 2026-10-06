@@ -63,7 +63,6 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
     # Callback for PCA plot regeneration
     @app.callback(
         Output('pca-plot', 'figure'),
-        Output('trace-map', 'data'),
         Input('dropdown-pc-x', 'value'),
         Input('dropdown-pc-y', 'value'),
         Input('dropdown-pc-z', 'value'),
@@ -219,6 +218,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             fig.update_layout(
                 autosize=True,
                 uirevision=uirev,
+                margin=dict(l=20, r=_r_margin, t=40, b=20),
                 legend=_color_legend,
                 hovermode='closest',
                 hoverlabel=dict(
@@ -227,9 +227,6 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     namelength=-1
                 )
             )
-
-        # Store trace map for fast updates: trace_name -> index
-        trace_map = {trace.name: i for i, trace in enumerate(fig.data)}
 
         # Apply hover formatting with current settings
         fig_dict = fig.to_dict()
@@ -316,7 +313,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     mask = np.isin(customdata_str, list(selected_set))
                     trace['selectedpoints'] = np.where(mask)[0].tolist()
 
-        return fig_dict, trace_map
+        return fig_dict
     
     if show_map_plot:
         @app.callback(

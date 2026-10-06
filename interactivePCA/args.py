@@ -105,9 +105,9 @@ def create_parser(script_name='Script'):
 
     # Aesthetics
     parser.add_argument('--aesthetics-file', type=str, default=None, metavar="FILE",
-                       help='Json file with stored aesthetics (default none)')
+                       help='JSON file with stored aesthetics (default none)')
     parser.add_argument('--session', type=str, default=None, metavar="FILE",
-                       help="Json file with a saved run: the full CLI args (eigenvec, "
+                       help="JSON file with a saved run: the full CLI args (eigenvec, "
                             "annotation, every setting) plus the view (selection, "
                             "grouping, aesthetics, axes, map, time-plot, panel sizes) — "
                             "reopens showing exactly that, on its own with no other flag "
@@ -197,13 +197,12 @@ def _merge_session_args(parsed_args, parser):
     return parsed_args
 
 
-def parse_args(args=None, dev_mode=False):
+def parse_args(args=None):
     """
     Parse command-line arguments.
 
     Args:
         args: List of argument strings. If None, uses sys.argv
-        dev_mode: If True, use development defaults
 
     Returns:
         Parsed arguments namespace
