@@ -49,6 +49,7 @@ def create_app(args):
         annotation_cols = {}
         ANNOTATION_TIME = ANNOTATION_LAT = ANNOTATION_LONG = None
         show_annotation_table = show_map_plot = show_time_plot = False
+        map_initially_visible = time_initially_visible = False
         init_selected_ids = []
         dropdown_group_list = ['none']
         dropdown_group_symbol_list = ['none']
@@ -214,14 +215,23 @@ def create_app(args):
         ANNOTATION_LAT = annotation_cols.get('latitude')
         ANNOTATION_LONG = annotation_cols.get('longitude')
         show_annotation_table = annotation_desc is not None
-        show_map_plot = (
+        # The map/time panels (and their callbacks) exist whenever there's
+        # annotation data to pick columns from — not only when --latitude/
+        # --longitude/--time happen to already resolve to real columns. That
+        # lets the Settings 2 tab assign those columns live, with no restart.
+        # Whether a resolved column was actually GIVEN only decides whether
+        # the panel starts out visible (map_initially_visible/
+        # time_initially_visible, below) — not whether it exists at all.
+        show_map_plot = show_annotation_table
+        show_time_plot = show_annotation_table
+        map_initially_visible = (
             show_annotation_table
             and ANNOTATION_LAT is not None
             and ANNOTATION_LONG is not None
             and ANNOTATION_LAT in df.columns
             and ANNOTATION_LONG in df.columns
         )
-        show_time_plot = (
+        time_initially_visible = (
             show_annotation_table
             and ANNOTATION_TIME is not None
             and ANNOTATION_TIME in df.columns
@@ -339,6 +349,8 @@ def create_app(args):
         dropdown_group_symbol_list=dropdown_group_symbol_list,
         has_embedded_annotation_cols=has_embedded_annotation_cols,
         init_session=init_session,
+        map_initially_visible=map_initially_visible,
+        time_initially_visible=time_initially_visible,
     )
     app.layout = layout_data['layout']
 
@@ -347,7 +359,7 @@ def create_app(args):
         """
         function(active_tab) {
             // Hide all tab content divs
-            const tabs = ['pca_tab', 'annotation_tab', 'settings_tab', 'help_tab'];
+            const tabs = ['pca_tab', 'annotation_tab', 'settings_tab', 'settings2_tab', 'help_tab'];
             tabs.forEach(function(tab) {
                 const el = document.getElementById(tab + '_content');
                 if (el) {

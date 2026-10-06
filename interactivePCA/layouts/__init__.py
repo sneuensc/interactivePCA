@@ -93,7 +93,7 @@ def create_layout(args, df, pcs,
                  init_selected_ids, init_group, init_continuous, init_aesthetics,
                  dropdown_group_list, dropdown_list_continuous,
                  dropdown_group_symbol_list=None, has_embedded_annotation_cols=False,
-                 init_session=None):
+                 init_session=None, map_initially_visible=False, time_initially_visible=False):
     """
     Create the main application layout.
     
@@ -161,6 +161,8 @@ def create_layout(args, df, pcs,
             init_selected_ids,
             dropdown_group_symbol_list=dropdown_group_symbol_list or dropdown_group_list,
             init_group_symbol=init_group_symbol,
+            map_initially_visible=map_initially_visible,
+            time_initially_visible=time_initially_visible,
         ) if df is not None else eigenvec_loader_panel(args)
     })
 
@@ -182,7 +184,28 @@ def create_layout(args, df, pcs,
         'value': 'settings_tab',
         'content': settings_panel(args)
     })
-    
+
+    # Settings 2 tab (always present): experimental per-panel reorganization
+    # of the plotting parameters (see create_settings2_tab/callbacks/settings2.py).
+    # The map/time panels exist (show_map_plot/show_time_plot) whenever
+    # annotation data is loaded at all — matching app.py/callbacks/__init__.py
+    # — regardless of whether --latitude/--longitude/--time were given;
+    # map_initially_visible/time_initially_visible (whether they were) only
+    # decide the panel's/checkbox's starting state, not whether it exists.
+    show_map_plot = df is not None and annotation_desc is not None
+    show_time_plot = df is not None and annotation_desc is not None
+    tab_configs.append({
+        'label': 'Settings 2',
+        'value': 'settings2_tab',
+        'content': create_settings2_tab(
+            df, pcs, continuous_columns, ANNOTATION_LAT, ANNOTATION_LONG, ANNOTATION_TIME,
+            show_map_plot=show_map_plot, show_time_plot=show_time_plot,
+            show_annotation_table=annotation_desc is not None,
+            map_initially_visible=map_initially_visible,
+            time_initially_visible=time_initially_visible,
+        )
+    })
+
     # Help tab
     from ..args import create_parser
     parser = create_parser()
@@ -467,6 +490,15 @@ def create_layout(args, df, pcs,
     return {'layout': layout}
 
 
+def _pca_axis_columns(pcs, continuous_columns):
+    """Columns offered on the PCA plot's X/Y/Z axes: the PCA dimensions first
+    (the common case and the defaults), then any other continuous column not
+    already among them — shared between create_pca_tab and create_settings2_tab
+    so the two stay in sync.
+    """
+    return list(pcs) + [c for c in (continuous_columns or []) if c not in pcs]
+
+
 def _dropdown_width(labels, min_px=90, char_px=7.2, padding_px=50):
     """Width sized to the longest option actually offered, rather than a
     guessed fixed pixel value — column names are already bounded by
@@ -477,7 +509,8 @@ def _dropdown_width(labels, min_px=90, char_px=7.2, padding_px=50):
 
 def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
                    df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None, init_selected_ids=None,
-                   dropdown_group_symbol_list=None, init_group_symbol='none'):
+                   dropdown_group_symbol_list=None, init_group_symbol='none',
+                   map_initially_visible=False, time_initially_visible=False):
     """Create PCA tab layout with map on the right and extra panels below."""
     # Determine if legend should be shown initially (only if group has multiple unique values)
     init_show_legend = []
@@ -508,9 +541,14 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         legend_title=init_group
     )
     
-    # Generate initial map figure (if coordinates available)
+    # Generate initial map figure whenever annotation is loaded at all — if
+    # ANNOTATION_LAT/ANNOTATION_LONG are None (no --latitude/--longitude
+    # resolved yet), generate_map_fig_scattergeo already degrades gracefully
+    # to a "coordinates not available" placeholder, so the panel still exists
+    # (just hidden initially — see map_initially_visible) for Settings 2 to
+    # populate live.
     init_map_fig = None
-    if ANNOTATION_LAT is not None and ANNOTATION_LONG is not None:
+    if annotation_desc is not None:
         # Default to the Scattergeo map (consistent with the PCA/time plots);
         # a toggle lets the user switch to the tiled Scattermap at runtime.
         init_map_fig = generate_map_fig_scattergeo(
@@ -722,8 +760,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     _lbl_ml = {**_lbl, 'marginLeft': '12px'}
     # Axes are not restricted to the PCA dimensions: any continuous column can
     # go on X/Y/Z, so a PC can be plotted against age, latitude, coverage, etc.
-    # Dimensions stay first — they remain the common case and the defaults.
-    axis_columns = list(pcs) + [c for c in (continuous_columns or []) if c not in pcs]
+    axis_columns = _pca_axis_columns(pcs, continuous_columns)
     _axis_options = [{'label': c, 'value': c} for c in axis_columns]
     _axis_style = {'width': _dropdown_width(axis_columns), 'fontSize': '13px'}
     pca_plot = html.Div([
@@ -774,26 +811,27 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         ),
     ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
 
-    # Optional panels
+    # Optional panels — the map/time panels (and their callbacks) exist
+    # whenever annotation data is loaded at all, not only once --latitude/
+    # --longitude/--time happen to already resolve to real columns; whether
+    # they START OUT visible is the separate map_initially_visible/
+    # time_initially_visible flags (app.py), applied further down to the
+    # panes' initial style. This lets the Settings 2 tab assign those columns
+    # — and reveal the panel — live, with no restart.
     show_annotation_table = annotation_desc is not None
-    show_map_plot = (
-        show_annotation_table
-        and ANNOTATION_LAT is not None
-        and ANNOTATION_LONG is not None
-        and ANNOTATION_LAT in df.columns
-        and ANNOTATION_LONG in df.columns
-        and init_map_fig is not None
-    )
-    show_time_plot = (
-        show_annotation_table
-        and ANNOTATION_TIME is not None
-        and ANNOTATION_TIME in df.columns
-    )
+    show_map_plot = show_annotation_table
+    show_time_plot = show_annotation_table
 
     # Time/continuous plot below PCA plot
     time_hist = html.Div()
     continuous_columns = continuous_columns or []
-    default_continuous = ANNOTATION_TIME if show_time_plot else None
+    # Prefer the resolved --time column; otherwise fall back to the first
+    # available continuous column so the panel has *something* to show even
+    # before the user assigns a real time column via Settings 2.
+    if ANNOTATION_TIME is not None and ANNOTATION_TIME in df.columns:
+        default_continuous = ANNOTATION_TIME
+    else:
+        default_continuous = continuous_columns[0] if continuous_columns else None
     if default_continuous is not None and default_continuous in df.columns:
         time_vals = df[default_continuous].dropna()
         if time_vals.empty:
@@ -1028,7 +1066,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         time_split = 100 - pca_split
 
         left_pane = html.Div([
-            html.Div(pca_plot, style={'flex': f'0 0 {pca_split}%', 'overflow': 'hidden', 'padding': '5px'}),
+            html.Div(pca_plot, id='pca-plot-pane', style={'flex': f'0 0 {pca_split}%', 'overflow': 'hidden', 'padding': '5px'}),
             html.Div(
                 id='pca-time-resizer',
                 style={
@@ -1042,15 +1080,19 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                     'transition': 'background-color 0.2s',
                     'position': 'relative',
                     'zIndex': 5,
-                    'pointerEvents': 'auto'
+                    'pointerEvents': 'auto',
+                    **({'display': 'none'} if not time_initially_visible else {}),
                 },
                 title='Drag to resize panes'
             ),
-            html.Div(time_hist, style={'flex': f'0 0 {time_split}%', 'overflow': 'hidden', 'padding': '5px'})
+            html.Div(time_hist, id='time-plot-pane', style={
+                'flex': f'0 0 {time_split}%', 'overflow': 'hidden', 'padding': '5px',
+                **({'display': 'none'} if not time_initially_visible else {}),
+            })
         ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
     else:
         left_pane = html.Div([
-            html.Div(pca_plot, style={'flex': '1 1 auto', 'overflow': 'hidden', 'padding': '5px'})
+            html.Div(pca_plot, id='pca-plot-pane', style={'flex': '1 1 auto', 'overflow': 'hidden', 'padding': '5px'})
         ], style={'display': 'flex', 'flexDirection': 'column', 'height': '100%', 'gap': '0'})
     
     # Map plot (top right) + Annotation table (bottom right)
@@ -1139,7 +1181,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
 
     def make_tab_panel(flex_style):
         """Build the 3-tab panel (Table / Details / Filter)."""
-        return html.Div([
+        return html.Div(id='table-plot-pane', children=[
             dcc.Tabs(
                 id='right-panel-tabs',
                 value='tab-table',
@@ -1191,7 +1233,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             table_split = 100 - map_split
 
             map_section = html.Div([
-                html.Div(map_plot, style={'flex': f'0 0 {map_split}%', 'overflow': 'hidden', 'padding': '5px'}),
+                html.Div(map_plot, id='map-plot-pane', style={
+                    'flex': f'0 0 {map_split}%', 'overflow': 'hidden', 'padding': '5px',
+                    **({'display': 'none'} if not map_initially_visible else {}),
+                }),
                 html.Div(
                     id='map-table-resizer',
                     style={
@@ -1205,7 +1250,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         'transition': 'background-color 0.2s',
                         'position': 'relative',
                         'zIndex': 5,
-                        'pointerEvents': 'auto'
+                        'pointerEvents': 'auto',
+                        **({'display': 'none'} if not map_initially_visible else {}),
                     },
                     title='Drag to resize panes'
                 ),
@@ -1385,6 +1431,119 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             }
         )
     ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
+
+
+def _settings2_section(title, checkbox_id, checkbox_checked, body, available=True, unavailable_note=None):
+    """One bordered section of the Settings 2 tab: a Show-this-panel checkbox
+    plus whatever axis controls apply to that panel. When the panel does not
+    currently exist (its data was never loaded), the checkbox is disabled and
+    unavailable_note explains why, instead of hiding the whole section.
+    """
+    return dbc.Card([
+        dbc.CardHeader([
+            dbc.Checkbox(
+                id=checkbox_id, value=checkbox_checked, disabled=not available,
+                label=f"Show {title}", style={'marginBottom': 0},
+            ),
+        ]),
+        dbc.CardBody(
+            body if available else html.Small(unavailable_note, className='text-muted')
+        ),
+    ], className='mb-3')
+
+
+def create_settings2_tab(df, pcs, continuous_columns, ANNOTATION_LAT, ANNOTATION_LONG, ANNOTATION_TIME,
+                         show_map_plot, show_time_plot, show_annotation_table,
+                         map_initially_visible=False, time_initially_visible=False):
+    """Experimental reorganization of the plotting parameters: one section per
+    panel of the PCA tab (PCA plot, map, time plot, annotation table), each
+    with a Show checkbox and (for the figures) the axis column pickers.
+
+    These controls mirror the live ones already in the PCA tab rather than
+    replacing them — see callbacks/settings2.py for how the two stay in sync,
+    live, with no relaunch. The map/time panels exist as soon as annotation
+    data is loaded at all (show_map_plot/show_time_plot) — map_initially_visible/
+    time_initially_visible only decide whether their Show checkbox starts out
+    checked, i.e. whether --latitude/--longitude/--time happened to already
+    resolve. Only when there is no annotation data whatsoever (nothing to ever
+    pick a column from) does a section show a disabled checkbox and a note
+    instead of controls.
+    """
+    if df is None:
+        return html.Div(
+            "Load an eigenvec file (PCA tab) first.",
+            style={'padding': '20px', 'color': '#999'}
+        )
+
+    axis_columns = _pca_axis_columns(pcs, continuous_columns)
+    axis_opts = [{'label': c, 'value': c} for c in axis_columns]
+    _row_style = {'display': 'flex', 'alignItems': 'center', 'marginBottom': '8px'}
+    _lbl_style = {'width': '70px', 'fontWeight': 500, 'fontSize': '13px'}
+    _dd_style = {'flex': '1', 'maxWidth': '280px'}
+
+    def _axis_row(label, dd_id, value):
+        return html.Div([
+            html.Label(label, style=_lbl_style),
+            dcc.Dropdown(id=dd_id, options=axis_opts, value=value, clearable=False, style=_dd_style),
+        ], style=_row_style)
+
+    pca_body = html.Div([
+        _axis_row('X:', 'settings2-pc-x', pcs[0]),
+        _axis_row('Y:', 'settings2-pc-y', pcs[1]),
+        _axis_row('Z:', 'settings2-pc-z', pcs[2] if len(pcs) > 2 else pcs[0]),
+    ])
+
+    geo_columns = [c for c in continuous_columns if c not in pcs]
+    geo_opts = [{'label': c, 'value': c} for c in geo_columns]
+    map_body = html.Div([
+        html.Div([
+            html.Label('Lat:', style=_lbl_style),
+            dcc.Dropdown(id='settings2-map-lat', options=geo_opts, value=ANNOTATION_LAT,
+                        clearable=False, style=_dd_style),
+        ], style=_row_style),
+        html.Div([
+            html.Label('Lon:', style=_lbl_style),
+            dcc.Dropdown(id='settings2-map-lon', options=geo_opts, value=ANNOTATION_LONG,
+                        clearable=False, style=_dd_style),
+        ], style=_row_style),
+    ])
+
+    # Same fallback as create_pca_tab's time_hist: prefer the resolved --time
+    # column, otherwise the first continuous column, so this stays in sync
+    # with the live 'time-variable' dropdown's own initial value.
+    if ANNOTATION_TIME is not None and ANNOTATION_TIME in (df.columns if df is not None else []):
+        default_time = ANNOTATION_TIME
+    else:
+        default_time = continuous_columns[0] if continuous_columns else None
+    time_body = html.Div([
+        _axis_row('Time:', 'settings2-time-var', default_time),
+    ])
+
+    return html.Div([
+        html.H4('Plotting panels (experimental)', style={'marginBottom': '6px'}),
+        html.P(
+            "Show or hide each panel of the PCA tab and pick its axis columns. "
+            "These controls act immediately on the running app (no restart) and "
+            "stay in sync with the matching controls in the PCA tab itself.",
+            className='text-muted', style={'marginBottom': '16px'}
+        ),
+        _settings2_section('PCA plot', 'settings2-show-pca', True, pca_body),
+        _settings2_section(
+            'map', 'settings2-show-map', map_initially_visible, map_body,
+            available=show_map_plot,
+            unavailable_note='No annotation loaded — load one via the Annotation tab and restart.',
+        ),
+        _settings2_section(
+            'time plot', 'settings2-show-time', time_initially_visible, time_body,
+            available=show_time_plot,
+            unavailable_note='No annotation loaded — load one via the Annotation tab and restart.',
+        ),
+        _settings2_section(
+            'annotation table', 'settings2-show-table', True, html.Div(),
+            available=show_annotation_table,
+            unavailable_note='No annotation loaded — load one via the Annotation tab and restart.',
+        ),
+    ], style={'height': '100%', 'overflow': 'auto', 'padding': '20px', 'maxWidth': '480px'})
 
 
 def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
