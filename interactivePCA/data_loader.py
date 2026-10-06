@@ -155,7 +155,7 @@ def resolve_annotation_columns(annotation_desc, args, default_id=None):
     if args.annotationID is not None:
         annotation_id = get_abbr_of(args.annotationID, descriptions, abbreviations)
         if annotation_id is None or annotation_id not in columns:
-            logging.info(f"Warning: Specified annotationID '{args.annotationID}' not found. Using first column.")
+            logging.warning(f"Warning: Specified annotationID '{args.annotationID}' not found. Using first column.")
             annotation_id = fallback_id
     else:
         annotation_id = fallback_id

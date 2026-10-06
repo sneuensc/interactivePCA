@@ -201,7 +201,8 @@ def get_aesthetics_for_group(args, group, df, store_data):
         return store_data[group]
 
     # New group — generate fresh aesthetics then carry over default/unselected
-    # from the most recently visited group (last entry in the store).
+    # from the most recently saved group (last entry in the store — see
+    # save_aesthetics_edits, which re-inserts on save to keep this order true).
     new_aest = get_init_aesthetics(args, group, df)
     ref = list(store_data.values())[-1]
     for key in ('default', 'unselected'):

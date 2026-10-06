@@ -115,7 +115,7 @@ def create_layout(args, df, pcs,
             or None
 
     Returns:
-        Dict with 'layout' and 'tab_content_map' keys
+        Dict with a 'layout' key
     """
     # Build tab list
     tab_configs = []
@@ -278,9 +278,6 @@ def create_layout(args, df, pcs,
         'content': help_content
     })
     
-    # Store tab content map for callback
-    tab_content_map = {config['value']: config['content'] for config in tab_configs}
-    
     # Initialize store with all available aesthetics (from file + defaults for init_group)
     init_store_data = {}
     
@@ -324,9 +321,6 @@ def create_layout(args, df, pcs,
         dcc.Store(id='selected-ids', data=init_selected_ids),
         dcc.Store(id='selected-source', data='initial'),
         dcc.Store(id='marker-aesthetics-store', data=init_store_data),
-        dcc.Store(id='trace-pca', data={}),
-        dcc.Store(id='trace-map', data={}),
-        dcc.Store(id='trace-time', data={}),
         dcc.Store(id='selection-store', data=init_selected_ids),  # Selected IDs for cross-plot sync
         dcc.Store(id='hover-detailed', data=False),  # Toggle for detailed hover information
         dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
@@ -470,7 +464,15 @@ def create_layout(args, df, pcs,
         )
     ], style={'height': '100vh', 'display': 'flex', 'flexDirection': 'column'})
     
-    return {'layout': layout, 'tab_content_map': tab_content_map}
+    return {'layout': layout}
+
+
+def _dropdown_width(labels, min_px=90, char_px=7.2, padding_px=50):
+    """Width sized to the longest option actually offered, rather than a
+    guessed fixed pixel value — column names are already bounded by
+    --col-abbrev, so the longest one is known here."""
+    longest = max((len(str(l)) for l in labels), default=0)
+    return f'{max(min_px, round(longest * char_px + padding_px))}px'
 
 
 def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
@@ -718,32 +720,38 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # PCA plot with axis control bar above it (mirrors the time-plot pattern)
     _lbl = {'fontWeight': 'bold', 'fontSize': '13px', 'marginRight': '6px'}
     _lbl_ml = {**_lbl, 'marginLeft': '12px'}
+    # Axes are not restricted to the PCA dimensions: any continuous column can
+    # go on X/Y/Z, so a PC can be plotted against age, latitude, coverage, etc.
+    # Dimensions stay first — they remain the common case and the defaults.
+    axis_columns = list(pcs) + [c for c in (continuous_columns or []) if c not in pcs]
+    _axis_options = [{'label': c, 'value': c} for c in axis_columns]
+    _axis_style = {'width': _dropdown_width(axis_columns), 'fontSize': '13px'}
     pca_plot = html.Div([
         html.Div([
             html.Label('X:', style=_lbl),
             dcc.Dropdown(
                 id='dropdown-pc-x',
-                options=[{'label': pc, 'value': pc} for pc in pcs],
+                options=_axis_options,
                 value=pcs[0],
                 clearable=False,
-                style={'width': '90px', 'fontSize': '13px'}
+                style=_axis_style
             ),
             html.Label('Y:', style=_lbl_ml),
             dcc.Dropdown(
                 id='dropdown-pc-y',
-                options=[{'label': pc, 'value': pc} for pc in pcs],
+                options=_axis_options,
                 value=pcs[1],
                 clearable=False,
-                style={'width': '90px', 'fontSize': '13px'}
+                style=_axis_style
             ),
             html.Div([
                 html.Label('Z:', style=_lbl_ml),
                 dcc.Dropdown(
                     id='dropdown-pc-z',
-                    options=[{'label': pc, 'value': pc} for pc in pcs],
+                    options=_axis_options,
                     value=pcs[2] if len(pcs) > 2 else pcs[0],
                     clearable=False,
-                    style={'width': '90px', 'fontSize': '13px'}
+                    style=_axis_style
                 ),
             ], id='z-axis-container', style={'display': 'none', 'alignItems': 'center'}),
             dcc.Checklist(
@@ -894,13 +902,6 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 if title is not None:
                     kwargs['title'] = title
                 return html.Div(children, **kwargs)
-
-            def _dropdown_width(labels, min_px=90, char_px=7.2, padding_px=50):
-                """Width sized to the longest option actually offered, rather
-                than a guessed fixed pixel value — column names are already
-                bounded by --col-abbrev, so the longest one is known here."""
-                longest = max((len(str(l)) for l in labels), default=0)
-                return f'{max(min_px, round(longest * char_px + padding_px))}px'
 
             _view_mode_labels = ['Scatter', 'Violin', 'Distribution', 'Overlay']
             _group_mode_labels = ['No group', 'Group', 'Group with name']
@@ -1094,8 +1095,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         table_data = df[table_cols].to_dict('records')
     
     column_defs = []
-    if table_data:
-        for col in table_data[0].keys():
+    if annotation_columns:
+        for col in table_cols:
             if col == 'id':
                 column_defs.append(create_standard_column_def(col, col, width=120, pinned='left'))
             else:

@@ -14,6 +14,15 @@ from dash import Input, Output, State, ctx
 
 from ..utils import nice_step, nice_bounds
 
+# The app-wide sentinel for "a filter/selection that genuinely matches zero
+# real samples" — distinct from an empty/falsy selection-store, which means
+# "no filter, everything selected" (see update_pca_selection etc.). Every
+# selection-store writer that can legitimately produce zero matches (a table
+# filter, a pandas query, deselecting the last selected row, the time-slice
+# window) must return this instead of a bare [], or every plot/table/counter
+# would instead show "everything selected".
+EMPTY_SELECTION = ['__time_window_empty__']
+
 
 def register_selection_callbacks(app, df, annotation_desc, show_annotation_table=True, show_map_plot=True,
                                  show_time_plot=True, ANNOTATION_TIME=None):
@@ -44,6 +53,8 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         in the message.  Hidden points are excluded from the selected count.
         """
         n_total = len(df)
+        if selected_indexes == EMPTY_SELECTION:
+            selected_indexes = []
         sel_ids = set(str(sid) for sid in (selected_indexes or []))
 
         is_cat = group and group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi'
@@ -166,7 +177,7 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         # a non-empty list that isn't actually any real ids.
         if not selected_ids:
             ids = df['id'].tolist()
-        elif selected_ids == ['__time_window_empty__']:
+        elif selected_ids == EMPTY_SELECTION:
             ids = []
         else:
             ids = selected_ids
@@ -298,7 +309,8 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
                 return df['id'].tolist(), 'Reset', ""
             try:
                 filtered_df = df.query(query_string)
-                return filtered_df['id'].tolist(), 'query filter', ""
+                ids = filtered_df['id'].tolist() or EMPTY_SELECTION
+                return ids, 'query filter', ""
             except Exception as e:
                 return dash.no_update, dash.no_update, f"Query error: {str(e)}"
     
@@ -311,17 +323,6 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         if group == 'none' or group not in df.columns:
             return {'display': 'none'}
         return {'display': 'flex', 'alignItems': 'center'}
-    
-    if show_annotation_table:
-        @app.callback(
-            Output('pca-annotation-table', 'filterModel'),
-            Input('status-filter-radio', 'value'),
-        )
-        def filter_table_by_status(filter_value):
-            """Apply a Status filter to the annotation table via the radio buttons."""
-            if not filter_value or filter_value == 'all':
-                return {}
-            return {'Status': {'filterType': 'text', 'type': 'equals', 'filter': filter_value}}
 
     if show_annotation_table:
         @app.callback(
@@ -405,8 +406,9 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
                 # All filters cleared — restore full selection
                 return df['id'].tolist(), 'Reset'
             if not virtual_row_data:
-                return [], 'table filter'
-            return sorted([str(row['id']) for row in virtual_row_data if 'id' in row]), 'table filter'
+                return EMPTY_SELECTION, 'table filter'
+            ids = sorted([str(row['id']) for row in virtual_row_data if 'id' in row]) or EMPTY_SELECTION
+            return ids, 'table filter'
 
     if show_annotation_table:
         @app.callback(
@@ -436,13 +438,24 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
                 return dash.no_update, dash.no_update, dash.no_update
 
             # ── selection-store ──────────────────────────────────────────────
-            current_sel = set(str(sid) for sid in (selected_ids or []))
+            # Expand the app-wide sentinels to their real meaning before diffing:
+            # falsy means "everything selected" (not "nothing"), and the
+            # time-window-empty sentinel means "nothing" (not a literal id).
+            if not selected_ids:
+                current_sel = set(df['id'].astype(str))
+            elif selected_ids == EMPTY_SELECTION:
+                current_sel = set()
+            else:
+                current_sel = set(str(sid) for sid in selected_ids)
             new_sel = set(current_sel)
             if new_status == 'selected':
                 new_sel.add(row_id)
             else:
                 new_sel.discard(row_id)
-            sel_out = sorted(new_sel) if new_sel != current_sel else dash.no_update
+            if new_sel != current_sel:
+                sel_out = sorted(new_sel) if new_sel else EMPTY_SELECTION
+            else:
+                sel_out = dash.no_update
             source_out = 'table status edit' if sel_out is not dash.no_update else dash.no_update
 
             # ── hidden-groups-store ──────────────────────────────────────────

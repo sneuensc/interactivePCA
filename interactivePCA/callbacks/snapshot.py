@@ -83,8 +83,19 @@ def register_snapshot_callback(app):
                 var el = wrapper.querySelector('.js-plotly-plot') || wrapper;
                 if (!el || !el.data) return;
 
-                var data = el.data.filter(function(t) {
-                    return t.name !== '__hover_highlight__';
+                // Keep the __hover_highlight__ trace (just reset to empty) rather
+                // than dropping it: the runtime's hover sync below looks it up by
+                // name on every hover event, and a figure captured without it
+                // would make hover highlighting silently do nothing all export.
+                var data = el.data.map(function(t) {
+                    if (t.name !== '__hover_highlight__') return t;
+                    var cleared = Object.assign({}, t);
+                    if ('lat' in cleared) cleared.lat = [];
+                    if ('lon' in cleared) cleared.lon = [];
+                    if ('x' in cleared) cleared.x = [];
+                    if ('y' in cleared) cleared.y = [];
+                    if ('z' in cleared) cleared.z = [];
+                    return cleared;
                 });
                 var layout = Object.assign({}, el.layout || {});
                 delete layout.uirevision;
@@ -127,8 +138,12 @@ def register_snapshot_callback(app):
             // ── table columns (AG Grid's own columnDefs shape — dash-ag-grid
             // is a thin wrapper, so these pass straight through) ───────────
             function filterCols(cols) {
+                // 'Status' is the live app's editable selection-state column
+                // (see selection.py's status_col) — it has no backing logic in
+                // this read-only export, so it is dropped rather than shipped
+                // as a dead dropdown editor.
                 return (cols || []).filter(function(c) {
-                    return c.field && c.field !== 'Selected' && !c.hide;
+                    return c.field && c.field !== 'Status' && !c.hide;
                 });
             }
             var vcols = filterCols(colDefs);

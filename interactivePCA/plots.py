@@ -6,7 +6,6 @@ import logging
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from functools import lru_cache
 from .utils import dict_of_dicts_to_tuple, tuple_to_dict_of_dicts
 
@@ -41,28 +40,22 @@ def set_dataframe(df):
     """
     Set the global DataFrame for plotting functions.
     Call this once after loading data in create_app().
-    
+
+    Clears the figure-builder caches below: their keys (column/aesthetics
+    arguments) don't include _df itself, so without this, calling
+    create_app() more than once in the same process (as the test suite does)
+    could return a figure built from a *previous* dataset whenever the cache
+    keys happened to collide.
+
     Args:
         df: DataFrame with PCA and annotation data
     """
     global _df
     _df = df
-
-
-def get_selected_df(selected_ids):
-    """Get DataFrame subset with selected IDs."""
-    if not selected_ids:
-        return _df
-    selected_mask = np.isin(_df['id'], selected_ids)
-    return _df[selected_mask]
-
-
-def get_unselected_df(selected_ids):
-    """Get DataFrame subset with unselected IDs."""
-    if not selected_ids:
-        return _df.iloc[0:0]
-    selected_mask = np.isin(_df['id'], selected_ids)
-    return _df[~selected_mask]
+    _generate_fig_scatter2d_cached.cache_clear()
+    _generate_fig_scatter3d_cached.cache_clear()
+    _generate_map_fig_scattermap_cached.cache_clear()
+    _generate_map_fig_scattergeo_cached.cache_clear()
 
 
 def get_selected_df_both(selected_ids):
@@ -150,7 +143,10 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
     point_color = aesthetics_group['color']
     point_size = aesthetics_group['size']
     point_opacity = aesthetics_group['opacity']
-    point_symbol = aesthetics_group['symbol'] if not mapplot else aesthetics_group['symbol_map']
+    # symbol_map may be absent in stores created before this feature was added
+    # (e.g. an older saved --session/--aesthetics-file); fall back to the plain
+    # symbol map so the map still renders instead of raising a KeyError.
+    point_symbol = aesthetics_group['symbol'] if not mapplot else aesthetics_group.get('symbol_map', aesthetics_group['symbol'])
     # line_color may be absent in stores created before this feature was added;
     # fall back to fill colour so the map/scatter render correctly regardless.
     line_color_map = aesthetics_group.get('line_color')
@@ -174,7 +170,7 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
             marker = dict(size=unsel_size, color=_to_rgba(unsel_color, unsel_opacity))
         else:
             marker = dict(size=unsel_size, color=unsel_color, opacity=unsel_opacity)
-        lc = line_color_map.get('unselected')
+        lc = None   # unselected.marker never accepts 'line' (see below)
     # Continuous color scale
     elif continuous:
         # Use provided subset or global df
@@ -207,7 +203,7 @@ def get_marker_dict(group, aesthetics_group, df_subset=None, legend=True, contin
 
 
 @lru_cache(maxsize=32)
-def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, xlab=True, ylab=True,
+def _generate_fig_scatter2d_cached(x_col, y_col, group, aesthetics_tuple, legend=True, xlab=True, ylab=True,
                            group_symbol=None, symbol_aest_tuple=None):
     """Generate 2D scatter plot (cached). group_symbol overrides per-point symbols."""
     aesthetics_group = tuple_to_dict_of_dicts(aesthetics_tuple)
@@ -298,8 +294,20 @@ def generate_fig_scatter2d(x_col, y_col, group, aesthetics_tuple, legend=True, x
     return fig
 
 
+def generate_fig_scatter2d(*args, **kwargs):
+    """Public entry point for the cached 2D scatter builder.
+
+    Returns a fresh copy of the cached figure on every call (including cache
+    hits) — callers (layouts/__init__.py, callbacks/plots.py) call
+    .update_layout() on what they get back, and mutating the object held in
+    the lru_cache directly would leak layout changes from one caller into
+    every other caller that later gets the same cache hit.
+    """
+    return go.Figure(_generate_fig_scatter2d_cached(*args, **kwargs))
+
+
 @lru_cache(maxsize=32)
-def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=True, 
+def _generate_fig_scatter3d_cached(x_col, y_col, z_col, group, aesthetics_tuple, legend=True,
                           xlab=True, ylab=True, zlab=True, selected_ids_tuple=None,
                           group_symbol=None, symbol_aest_tuple=None):
     """Generate 3D scatter plot (cached). group_symbol overrides per-point symbols."""
@@ -403,8 +411,14 @@ def generate_fig_scatter3d(x_col, y_col, z_col, group, aesthetics_tuple, legend=
     return fig
 
 
+def generate_fig_scatter3d(*args, **kwargs):
+    """Public entry point for the cached 3D scatter builder — see
+    generate_fig_scatter2d's docstring for why this returns a copy."""
+    return go.Figure(_generate_fig_scatter3d_cached(*args, **kwargs))
+
+
 @lru_cache(maxsize=32)
-def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None,
+def _generate_map_fig_scattermap_cached(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None,
                                 group_symbol=None, symbol_aest_tuple=None):
     """
     Generate map figure using Scattermap (cached for performance).
@@ -489,7 +503,10 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
             name=group,
             customdata=df_map['id'],
             text=df_map[group],
-            showlegend=legend,
+            # A colorbar (set via get_marker_dict's showscale above) already
+            # serves as the "legend" for a continuous scale, matching the
+            # 2D/3D scatter plots — a trace legend entry here would be redundant.
+            showlegend=False,
         ))
     else:
         for g, group_df in _ordered_group_iter(df_map, group, aesthetics_group):
@@ -536,12 +553,21 @@ def generate_map_fig_scattermap(group, aesthetics_tuple, legend=True, lat_col=No
 
     return fig
 
-# Alias for backward compatibility
+
+def generate_map_fig_scattermap(*args, **kwargs):
+    """Public entry point for the cached Scattermap builder — see
+    generate_fig_scatter2d's docstring for why this returns a copy."""
+    return go.Figure(_generate_map_fig_scattermap_cached(*args, **kwargs))
+
+
+# create_geographical_map is the name actually used by every call site
+# (callbacks/plots.py, layouts/__init__.py) — kept as the primary public name
+# rather than an alias, so there is exactly one obvious way to call it.
 create_geographical_map = generate_map_fig_scattermap
 
 
 @lru_cache(maxsize=32)
-def generate_map_fig_scattergeo(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None,
+def _generate_map_fig_scattergeo_cached(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None,
                                 group_symbol=None, symbol_aest_tuple=None):
     """Geographic map using Scattergeo (SVG "geo" subplot, cached).
 
@@ -594,7 +620,10 @@ def generate_map_fig_scattergeo(group, aesthetics_tuple, legend=True, lat_col=No
         traces.append(go.Scattergeo(
             lat=df_map[lat_col], lon=df_map[lon_col], mode='markers', marker=m,
             unselected=dict(marker=get_marker_dict(group, aesthetics_group, unselected=True)),
-            name=group, customdata=df_map['id'], text=df_map[group], showlegend=legend,
+            name=group, customdata=df_map['id'], text=df_map[group],
+            # A colorbar already serves as the "legend" for a continuous scale
+            # (matching the 2D/3D scatter plots) — no trace legend entry too.
+            showlegend=False,
         ))
     else:
         for g, group_df in _ordered_group_iter(df_map, group, aesthetics_group):
@@ -646,100 +675,9 @@ def generate_map_fig_scattergeo(group, aesthetics_tuple, legend=True, lat_col=No
     return fig
 
 
-def generate_time_histogram(df, df_selected, var_continuous, nbins=100):
-    """
-    Generate time histogram with selection overlay.
-    
-    Args:
-        df: Full DataFrame
-        df_selected: Selected DataFrame
-        var_continuous: Continuous variable column name
-        nbins: Number of bins
-    
-    Returns:
-        Plotly Figure object
-    """
-    trace_all = go.Histogram(
-        x=df[var_continuous],
-        nbinsx=nbins,
-        marker_color='lightgray',
-        opacity=0.6,
-        name='All'
-    )
-    traces = [trace_all]
-
-    if not df_selected.empty:
-        trace_selected = go.Histogram(
-            x=df_selected[var_continuous],
-            nbinsx=nbins,
-            marker_color='#1F77B4',
-            opacity=0.9,
-            name='Selected'
-        )
-        traces.append(trace_selected)
-
-    fig = go.Figure(traces)
-    fig.update_layout(
-        barmode='overlay',
-        yaxis_title='Count',
-        xaxis_title=var_continuous,
-        showlegend=True
-    )
-    return fig
-
-
-def generate_time_histogram_simple(df, var_continuous, nbins=100):
-    """
-    Generate simple time histogram.
-    
-    Args:
-        df: DataFrame
-        var_continuous: Continuous variable column name
-        nbins: Number of bins
-    
-    Returns:
-        Plotly Figure object
-    """
-    fig = px.histogram(df, x=var_continuous, nbins=nbins, title="", 
-                      color_discrete_sequence=['#1F77B4'])
-    fig.update_layout(yaxis_title='Count')
-    return fig
-
-
-def update_figure_selection_fast(selected_ids, fig, trace_map):
-    """
-    Update figure selection without recreating the entire figure.
-    
-    Args:
-        selected_ids: List of selected IDs
-        fig: Plotly Figure object
-        trace_map: Dictionary mapping trace names to indices
-    
-    Returns:
-        Updated Figure object
-    """
-    if not selected_ids:
-        for trace_idx in trace_map.values():
-            fig.data[trace_idx].selectedpoints = None
-        return fig
-
-    selected_set = set(selected_ids)
-
-    for name, trace_idx in trace_map.items():
-        trace = fig.data[trace_idx]
-        ids = getattr(trace, "customdata", None)
-        if ids is None:
-            continue
-
-        trace.selectedpoints = [
-            j for j, idv in enumerate(ids) if idv in selected_set
-        ]
-
-    return fig
-
-
-def get_selected_ids(selection):
-    """Extract selected IDs from selection dict."""
-    return [p['customdata'] for p in selection['points'] if 'customdata' in p]
+def generate_map_fig_scattergeo(*args, **kwargs):
+    """Public entry point for the cached Scattergeo builder — see
+    generate_fig_scatter2d's docstring for why this returns a copy."""
+    return go.Figure(_generate_map_fig_scattergeo_cached(*args, **kwargs))
 
 
