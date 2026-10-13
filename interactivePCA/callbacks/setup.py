@@ -119,6 +119,32 @@ def _compose_argv(values_by_name):
     return argv
 
 
+def _compose_argv_full(values_by_name):
+    """CLI argument list for EVERY option, falling back to the parser's own
+    default wherever values_by_name doesn't set one — unlike _compose_argv,
+    nothing is omitted just because it matches the default. A store_true
+    flag still can't spell "false" as a token, so one at its (always False)
+    default is still left out — there's no "it was explicitly off" to show.
+    """
+    parser = create_parser()
+    argv = []
+    for action in parser._actions:
+        if not action.option_strings or action.dest == 'help':
+            continue
+        val = values_by_name.get(action.dest)
+        opt = action.option_strings[0]
+        if isinstance(action, argparse._StoreTrueAction) or action.nargs == 0:
+            if val:
+                argv.append(opt)
+            continue
+        if val is None or (isinstance(val, str) and val.strip() == ''):
+            val = action.default
+        if val is None or (isinstance(val, str) and val.strip() == ''):
+            continue  # no override and no default either (e.g. --eigenvec)
+        argv.extend([opt, str(val)])
+    return argv
+
+
 def _relaunch_from(args, dom_values, overlay_names):
     """Merge current args + the overlaid DOM fields → argv, and relaunch.
 
@@ -246,6 +272,8 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             Output('eigenvec-read-status', 'children'),
             Output('eigenvec-details', 'style'),
             Output('embedded-annotation-section', 'style'),
+            Output('session-load-section', 'style'),
+            Output('use-file-annotation-btn', 'children', allow_duplicate=True),
             Input('read-eigenvec-btn', 'n_clicks'),
             State({'type': 'setup-arg', 'name': 'eigenvec'}, 'value'),
             prevent_initial_call=True,
@@ -256,17 +284,17 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
 
             if not path or not str(path).strip():
                 return no_update, no_update, no_update, dbc.Alert(
-                    'Enter the eigenvec file path.', color='warning'), no_update, no_update
+                    'Enter the eigenvec file path.', color='warning'), no_update, no_update, no_update, no_update
             if not os.path.isfile(path):
                 return no_update, no_update, no_update, dbc.Alert(
-                    f"File not found: {path}", color='danger'), no_update, no_update
+                    f"File not found: {path}", color='danger'), no_update, no_update, no_update, no_update
             try:
                 df = pd.read_csv(path, sep=detect_eigenvec_sep(path), nrows=None)
                 cols = list(df.columns)
                 n_samples = len(df)
             except Exception as exc:  # noqa: BLE001
                 return no_update, no_update, no_update, dbc.Alert(
-                    f"Could not read: {exc}", color='danger'), no_update, no_update
+                    f"Could not read: {exc}", color='danger'), no_update, no_update, no_update, no_update
 
             # Auto-detect dimensions from all columns (don't exclude any initially)
             # Find all columns matching PREFIX+number pattern
@@ -312,7 +340,7 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
                     f"No dimension columns found in '{path}' — expected columns "
                     "like PC1, PC2, ... with consecutive numbering starting at 1. "
                     "Provide 'Dimension columns' explicitly, or check the file.",
-                    color='danger'), {'display': 'none'}, no_update
+                    color='danger'), {'display': 'none'}, no_update, no_update, no_update
 
             # Count annotation columns (all columns that aren't ID or dimensions)
             dim_set = set(guessed_dims)
@@ -331,9 +359,12 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             status_msg = ' '.join(status_parts)
 
             options = [{'label': c, 'value': c} for c in cols]
+            file_annotation_label = ('Use annotation from extra file' if n_annotations > 0
+                                     else 'Read')
             return (options, id_col, dim_value,
                     dbc.Alert(status_msg, color='success'), {},
-                    {} if n_annotations > 0 else {'display': 'none'})
+                    {} if n_annotations > 0 else {'display': 'none'},
+                    {'display': 'none'}, file_annotation_label)
 
         @app.callback(
             Output({'type': 'setup-arg', 'name': 'selectedID'}, 'options'),

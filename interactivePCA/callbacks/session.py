@@ -7,11 +7,11 @@ see callbacks/setup.py:load_session_direct) reopens showing exactly that, no
 other field needed: args.py:_merge_session_args fills in any CLI arg not
 explicitly passed on that command line from the file's embedded 'args'.
 
-Not restored: a couple of fields that another callback auto-derives from one
-of these (pca-legend-toggle from dropdown-group, time-invert-toggle and the
-time-window's own bounds from time-variable) — setting them here would just
-race that callback and lose. They re-derive sensible values on their own once
-the driving field above them is restored.
+Not restored: a few fields that another callback auto-derives from one of
+these (time-invert-toggle, time-rotate-toggle, and the time-window's own
+bounds — all from time-variable) — setting them here would just race that
+callback and lose. They re-derive sensible values on their own once the
+driving field above them is restored.
 
 Plot zoom/pan and pane sizes live outside this module's Output-list mechanism:
 they're plain DOM/Plotly state with no Dash prop that would "just" re-apply
@@ -74,6 +74,7 @@ def _session_fields(show_map_plot, show_time_plot, show_annotation_table):
         ('dropdown-group', 'value', 'group'),
         ('dropdown-group-symbol', 'value', 'group_symbol'),
         ('hover-detailed-toggle', 'value', 'hover_detailed'),
+        ('settings2-legend-mode', 'value', 'legend_mode'),
         ('marker-aesthetics-store', 'data', 'marker_aesthetics'),
         ('symbol-aesthetics-store', 'data', 'symbol_aesthetics'),
         ('hidden-groups-store', 'data', 'hidden_groups'),
@@ -86,6 +87,8 @@ def _session_fields(show_map_plot, show_time_plot, show_annotation_table):
         fields += [
             ('map-type-toggle', 'value', 'map_type'),
             ('map-view-store', 'data', 'map_view'),
+            ('dropdown-map-x', 'value', 'map_x'),
+            ('dropdown-map-y', 'value', 'map_y'),
         ]
     if show_time_plot:
         fields += [

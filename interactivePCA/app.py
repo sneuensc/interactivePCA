@@ -8,9 +8,9 @@ import os
 import pandas as pd
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output
+from dash import Input, Output, html
 
-from .data_loader import load_eigenvec, load_annotation, merge_data, resolve_annotation_columns
+from .data_loader import load_eigenvec, load_annotation, merge_data, resolve_annotation_columns, resolve_column_set
 from .plots import set_dataframe
 from .utils import resolve_id_pattern
 from .relaunch import schedule_relaunch
@@ -59,6 +59,8 @@ def create_app(args):
         init_aesthetics = {}
         has_embedded_annotation_cols = False
         init_session = None
+        time_invert_columns = frozenset()
+        time_rotate_columns = frozenset()
     else:
         logging.info("Loading data files...")
 
@@ -183,8 +185,6 @@ def create_app(args):
             annotation,
             eigenvec_id_col='id',
             annotation_id_col=annotation_cols.get('id'),
-            time_col=annotation_cols.get('time'),
-            invert_time=args.time_invert
         )
 
         # Restrict which samples are loaded at all, if requested — unmatched
@@ -296,6 +296,18 @@ def create_app(args):
             )
         init_group = resolved_group if resolved_group and resolved_group in dropdown_group_list else dropdown_group_list[0]
 
+        # Which continuous columns' time-plot x-axis starts reversed (BP dates
+        # etc.) — defaults to just the resolved --time column (the old,
+        # single-column behaviour) unless --time-invert-columns opts into an
+        # explicit list; see data_loader.resolve_column_set.
+        time_invert_columns = resolve_column_set(
+            args.time_invert_columns, annotation_desc, fallback_columns=(ANNOTATION_TIME,)
+        )
+        # Which continuous columns' time-plot starts with x/y swapped — no
+        # implicit default (unlike time_invert_columns above), just whatever
+        # --time-rotate-columns explicitly lists.
+        time_rotate_columns = resolve_column_set(args.time_rotate_columns, annotation_desc)
+
         # Initialize continuous variable options
         dropdown_list_continuous = []
         init_continuous = ANNOTATION_TIME
@@ -351,6 +363,13 @@ def create_app(args):
         init_session=init_session,
         map_initially_visible=map_initially_visible,
         time_initially_visible=time_initially_visible,
+        time_invert_columns=time_invert_columns,
+        time_rotate_columns=time_rotate_columns,
+        init_pc_x=args.pc_x,
+        init_pc_y=args.pc_y,
+        init_pc_z=args.pc_z,
+        init_time_viz_mode=args.time_viz_mode,
+        init_time_bin_size=args.time_bin_size,
     )
     app.layout = layout_data['layout']
 
@@ -359,7 +378,7 @@ def create_app(args):
         """
         function(active_tab) {
             // Hide all tab content divs
-            const tabs = ['pca_tab', 'annotation_tab', 'settings_tab', 'settings2_tab', 'help_tab'];
+            const tabs = ['pca_tab', 'annotation_tab', 'settings_tab', 'help_tab'];
             tabs.forEach(function(tab) {
                 const el = document.getElementById(tab + '_content');
                 if (el) {
@@ -542,12 +561,13 @@ def create_app(args):
     # tab shell. The reload poller is registered in register_setup_callbacks.
     @app.callback(
         Output('relaunch-store', 'data', allow_duplicate=True),
+        Output('restart-status', 'children'),
         Input('restart-btn', 'n_clicks'),
         prevent_initial_call=True,
     )
     def _restart(n_clicks):
         if not n_clicks:
-            return dash.no_update
+            return dash.no_update, dash.no_update
         port = getattr(args, 'server_port', 8050)
         # Relaunch into an empty loader shell — identical to starting the
         # server fresh with no data arguments (just the file-path inputs, no
@@ -563,7 +583,10 @@ def create_app(args):
         if '--server-port' not in argv:
             argv.extend(['--server-port', str(port)])
         schedule_relaunch(argv)
-        return {'go': True, 'port': port}
+        # The only visible sign anything happened until the page reloads
+        # itself (relaunch.py's POLLER_JS) a couple of seconds later.
+        spinner = html.Span(dbc.Spinner(size='sm', color='danger'), title='Restarting…')
+        return {'go': True, 'port': port}, spinner
 
     # ── Map shape icons ─────────────────────────────────────────────────────
     # The MapLibre basemap ships no sprite, so non-'circle' marker symbols

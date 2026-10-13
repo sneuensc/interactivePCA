@@ -72,8 +72,10 @@ def _field_component(action, args, id_type='setup-arg'):
     if isinstance(action, argparse._StoreTrueAction) or action.nargs == 0:
         return dbc.Checkbox(id=comp_id, value=bool(default))
     if action.choices is not None:
+        # searchable=False: a fixed, short preset list (not sourced from the
+        # loaded file's own columns) has no use for a type-to-filter text box.
         return dcc.Dropdown(
-            id=comp_id, clearable=False, value=default,
+            id=comp_id, clearable=False, searchable=False, value=default,
             options=[{'label': str(c), 'value': c} for c in action.choices],
         )
     if action.type is int:
@@ -84,17 +86,54 @@ def _field_component(action, args, id_type='setup-arg'):
                      value='' if default is None else str(default))
 
 
-def _labeled_row(label, component, help_text=None):
-    return dbc.Row(
+def _labeled_row(label, component, help_text=None, label_width='130px', row_id=None):
+    """A right-aligned label + a component, vertically centred on the
+    component alone — the one shared row layout for every parameter, in
+    Settings, Settings 2 and the loader panels alike.
+
+    Plain flexbox, not dbc.Row/dbc.Col/dbc.Label's own grid machinery:
+    dbc.Label(width=...) adds Bootstrap's 'col-form-label' class, which pads
+    the label to match a *single* form-control's height on its own,
+    independently of the row's align-items setting — so the row's own align
+    prop ('start' vs 'center') never actually governed the label's position.
+
+    The label+box pair is its own inner flex row, centred (alignItems:
+    'center') — help_text is deliberately NOT a sibling inside that row
+    (unlike the dbc.Row version this replaced), since any sibling there
+    taller than the box would shift what "centred" means away from the box
+    itself. It is instead a plain block below the whole row, so it never
+    affects the label/box alignment above it.
+
+    label_width is a fixed width (not a % of the row): a % share left large
+    blank gaps to the left of short, right-aligned labels like "dim" or
+    "session" (Settings' own long CLI names need more room than Settings 2's
+    short "X:"/"Lat:" labels, hence this being a parameter, not a constant).
+    row_id optionally names the outer wrapper, for callbacks that show/hide
+    a whole row (e.g. Settings 2's time-group-mode-container).
+    """
+    label_box_row = html.Div(
         [
-            dbc.Label(label, width=4, style={'fontWeight': 500, 'textAlign': 'right'}),
-            dbc.Col(
-                [component] + ([html.Small(help_text, className='text-muted')]
-                               if help_text else []),
-                width=8,
+            html.Div(
+                label,
+                style={'flex': f'0 0 {label_width}', 'maxWidth': label_width,
+                      'fontWeight': 500, 'textAlign': 'right', 'paddingRight': '12px'},
+            ),
+            html.Div(component, style={'flex': '1 1 0', 'minWidth': '0'}),
+        ],
+        style={'display': 'flex', 'alignItems': 'center'},
+    )
+    extra = {'id': row_id} if row_id else {}
+    if not help_text:
+        return html.Div(label_box_row, className='mb-2', **extra)
+    return html.Div(
+        [
+            label_box_row,
+            html.Div(
+                html.Small(help_text, className='text-muted'),
+                style={'marginLeft': label_width, 'paddingLeft': '12px'},
             ),
         ],
-        className='mb-2', align='center',
+        className='mb-2', **extra,
     )
 
 
@@ -226,18 +265,28 @@ def eigenvec_loader_panel(args):
                 id='eigenvec-details',
                 style=_details_style(args, 'eigenvec'),
             ),
-            html.Hr(className='mt-4'),
-            html.H5('Or load a saved session', className='mt-3'),
-            html.P('A session.json saved via the app\'s "Save view" button carries '
-                  'its own eigenvec/annotation/settings and view (selection, '
-                  'grouping, aesthetics, axes, map, time-plot, panel sizes) — '
-                  'loading it reopens exactly that, no other field needed above.',
-                   className='text-muted'),
-            _file_row('Session file', args, by['session'], 'browse-session',
-                      'Type a server-side path, or Browse.'),
-            html.Div(dbc.Button('Load session', id='load-session-btn', color='secondary',
-                                n_clicks=0), className='my-2'),
-            html.Div(id='session-load-status', className='mb-2'),
+            # Hidden once the eigenvec file is actually read (see
+            # callbacks/setup.py:read_eigenvec) — loading a session is an
+            # alternative to the eigenvec/Read/Load flow above, not something
+            # to do in addition to it once that flow has already started.
+            html.Div(
+                [
+                    html.Hr(className='mt-4'),
+                    html.H5('Or load a saved session', className='mt-3'),
+                    html.P('A session.json saved via the app\'s "Save view" button carries '
+                          'its own eigenvec/annotation/settings and view (selection, '
+                          'grouping, aesthetics, axes, map, time-plot, panel sizes) — '
+                          'loading it reopens exactly that, no other field needed above.',
+                           className='text-muted'),
+                    _file_row('Session file', args, by['session'], 'browse-session',
+                              'Type a server-side path, or Browse.'),
+                    html.Div(dbc.Button('Load session', id='load-session-btn', color='secondary',
+                                        n_clicks=0), className='my-2'),
+                    html.Div(id='session-load-status', className='mb-2'),
+                ],
+                id='session-load-section',
+                style={} if not _initial(args, 'eigenvec') else {'display': 'none'},
+            ),
         ],
         style={'maxWidth': '760px'},
     )
@@ -326,6 +375,11 @@ def annotation_loader_panel(args, show_embedded_option=False, has_embedded_annot
     )
     file_help = ('Type a server-side path, or Browse. Only needed for "Use annotation '
                 'from extra file" or "Combine…" below.')
+    # Before the eigenvec is confirmed to have embedded annotation columns, the
+    # three-way choice is moot — there's only one option (a separate file), so
+    # this button just reads as a plain "Read" until callbacks/setup.py:
+    # read_eigenvec relabels it live once it detects embedded columns.
+    file_annotation_label = 'Use annotation from extra file' if has_embedded_annotation_cols else 'Read'
     return dbc.Container(
         [
             html.H4('Load annotation data', className='mt-3'),
@@ -335,7 +389,7 @@ def annotation_loader_panel(args, show_embedded_option=False, has_embedded_annot
             _file_row('Annotation file', args, by['annotation'], 'browse-annotation', file_help),
             html.Div(
                 [
-                    dbc.Button('Use annotation from extra file',
+                    dbc.Button(file_annotation_label,
                                id='use-file-annotation-btn', color='secondary',
                                n_clicks=0, className='me-2 mb-2'),
                     embedded_buttons,
@@ -349,43 +403,292 @@ def annotation_loader_panel(args, show_embedded_option=False, has_embedded_annot
     )
 
 
-def settings_panel(args):
-    """Settings-tab content: *every* CLI option + a Refresh (relaunch) button.
+# Display groupings for the Settings tab's own category cards — distinct
+# from EIGENVEC_FIELDS/ANNOTATION_FIELDS/PRIMARY_ARGS above, which are about
+# which tab/loader a field belongs to and how relaunches compose argv, not
+# about how this one tab visually organizes every field for display.
+_SETTINGS_EIGENVEC_FIELDS = ['eigenvec', 'dim', 'eigenvecID', 'selectedID', 'subsetID']
+_SETTINGS_SESSION_FIELDS = ['session']
+_SETTINGS_ANNOTATION_FIELDS = ['annotation', 'merge_embedded_annotation', 'annotationID',
+                               'ignore_case', 'ignore_space', 'col_abbrev', 'max_factors',
+                               'legend_abbrev']
+_SETTINGS_AESTHETICS_FIELDS = [
+    'aesthetics_file', 'point_color', 'point_size', 'point_opacity', 'point_symbol',
+    'point_color_unselected', 'point_size_unselected', 'point_opacity_unselected',
+    'point_symbol_unselected', 'color_schema_continuous',
+]
+_SETTINGS_SERVER_FIELDS = ['open_browser', 'server_port', 'dev']
+# Each of these only sets the INITIAL value of a live control already present
+# in the PCA tab (dropdown-group, dropdown-group-symbol, dropdown-pc-x/-y,
+# dropdown-map-x/-y, time-variable, time-viz-mode, time-bin-size,
+# settings2-legend-mode, hover-detailed-toggle) that then keeps acting
+# immediately, no relaunch needed — same pattern as map_initially_visible /
+# settings2-show-map. Excluded from the generic rows() scan so each shows up
+# as exactly one row (the live one in the PCA tab), not duplicated as a
+# second, relaunch-only row under "Rest".
+#
+# time_invert_columns/time_rotate_columns are multi-column lists with no
+# single live widget of their own — the PCA tab's 'Invert'/'Rotate'
+# checkboxes only ever speak for whichever one column is currently shown —
+# but the command generator (callbacks/settings2.py) keeps the full list in
+# sync with whatever that checkbox says for the active column on every
+# Generate click, so there's still no need for a separate editable row here.
+_SETTINGS_LIVE_ONLY_FIELDS = [
+    'legend', 'hover_minimal', 'group', 'group_shape', 'longitude', 'latitude',
+    'time', 'pc_x', 'pc_y', 'pc_z', 'time_viz_mode', 'time_bin_size',
+    'time_invert_columns', 'time_rotate_columns',
+    # pca_3d/time_group_mode/map_type each seed a single live PCA-tab control
+    # (pca-3d-toggle/time-group-mode/map-type-toggle); annotation_columns
+    # seeds the Annotation tab's own checkbox-selectable column table —
+    # same "live elsewhere, not a second editable row here" reasoning above.
+    'pca_3d', 'time_group_mode', 'map_type', 'annotation_columns',
+]
+
+
+def _settings_show_checkbox(label, checkbox_id, checked, available):
+    """One of the panel show/hide checkboxes in the Settings tab's first row.
+
+    Disabled (rather than hidden) when the panel's data was never loaded —
+    unchecked and non-interactive, same convention as the rest of this tab
+    uses for options that cannot currently apply.
+    """
+    return dbc.Checkbox(
+        id=checkbox_id, value=checked and available, disabled=not available,
+        label=label, style={'marginBottom': 0},
+    )
+
+
+def _top_actions():
+    """Generate / Generate full (build the argv that would reproduce the
+    current session — see callbacks/settings2.py:_register_command_generator
+    — and pop it up in _command_modal, rather than an inline box, so it's
+    always a fresh click's current state) + Refresh (relaunch with the
+    current values) — grouped together at the top-right, level with the
+    'Settings' title itself (see settings_panel), rather than Refresh sitting
+    alone at the very bottom where it's easy to miss after editing a field
+    near the top.
+    """
+    # Same fixed width (wide enough for the longest label, "Generate command
+    # (full)") + size='sm' on all three, so they line up evenly despite their
+    # very different label lengths and default sizes — color is the only
+    # thing left to tell them apart.
+    _btn_style = {'width': '190px'}
+    return html.Div(
+        [
+            dbc.Button('Generate command', id='settings2-gen-command-btn',
+                      color='secondary', size='sm', n_clicks=0, className='me-2',
+                      style=_btn_style),
+            dbc.Button('Generate command (full)', id='settings2-gen-command-full-btn',
+                      color='secondary', size='sm', n_clicks=0, className='me-3',
+                      style=_btn_style),
+            dbc.Button('Refresh', id='settings-apply-btn', color='primary', size='sm',
+                      n_clicks=0, style=_btn_style),
+        ],
+        style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap',
+              'justifyContent': 'flex-end'},
+    )
+
+
+def _command_modal():
+    """Popup opened by _top_actions, showing the generated command."""
+    return dbc.Modal(
+        [
+            dbc.ModalHeader(dbc.ModalTitle('Equivalent command'), close_button=True),
+            dbc.ModalBody(
+                dcc.Textarea(
+                    id='settings2-command-output', value='', readOnly=True,
+                    style={'width': '100%', 'height': '120px', 'fontFamily': 'monospace',
+                          'fontSize': '12px'},
+                ),
+            ),
+        ],
+        id='settings2-command-modal', is_open=False, size='lg',
+    )
+
+
+def _legend_row(args):
+    """Live 'Legend' mode dropdown — merges the old per-plot 'Show Legend'
+    checkbox with --show-all-legends into one tri-state setting: 'none' never
+    shows it, 'once' shows it on a single active plot at a time (relocating
+    between PCA/time/map as panels are hidden — see legend-target-store /
+    callbacks/settings2.py:_register_legend_target), 'everywhere' shows it on
+    every plot that has one. Acts immediately (callbacks/plots.py), no
+    relaunch — --legend only seeds its starting value.
+    """
+    return _labeled_row(
+        'legend',
+        dcc.Dropdown(
+            id='settings2-legend-mode', clearable=False, searchable=False,
+            value=_initial(args, 'legend', 'once'),
+            options=[{'label': c, 'value': c} for c in ('none', 'once', 'everywhere')],
+        ),
+        'How the group-colour legend is shown across the PCA/map/time plots.',
+    )
+
+
+def _hover_detailed_row(args):
+    """Live 'Hover detailed' checkbox — the merged home of --hover-minimal
+    (detailed is the default, i.e. unchecked --hover-minimal). Acts
+    immediately (hover-detailed store, callbacks/selection.py), no relaunch —
+    --hover-minimal only seeds its starting value.
+    """
+    return _labeled_row(
+        'hover-detailed',
+        dcc.Checklist(
+            id='hover-detailed-toggle',
+            options=[{'label': ' Enabled', 'value': 'hover_detailed'}],
+            value=[] if _initial(args, 'hover_minimal', False) else ['hover_detailed'],
+            labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'},
+        ),
+        'Show every selected annotation column on hover instead of just ID + group.',
+    )
+
+
+def _column_dropdown_row(dest, args, columns, by):
+    """A Settings-tab row for an ID-column CLI field (eigenvecID/annotationID),
+    backed by a dropdown of the actual columns found in the already-loaded
+    file — the Settings-tab counterpart of the loader panels' own ID-column
+    pickers (_dependent_dropdown above), just populated immediately here
+    since the file is already loaded (the loader only knows its columns
+    after the user clicks Read).
+    """
+    action = by[dest]
+    label = action.option_strings[0].lstrip('-')
+    current = _initial(args, dest)
+    columns = columns or []
+    options = [{'label': c, 'value': c} for c in columns]
+    if current and current not in columns:
+        # Keep the already-configured value selectable even if a stale read
+        # (or an abbreviation already applied) left it out of the fresh list.
+        options = [{'label': current, 'value': current}] + options
+    value = current if current else (columns[0] if columns else None)
+    return _labeled_row(
+        label,
+        dcc.Dropdown(id=_arg(dest, 'settings-arg'), options=options, value=value,
+                    clearable=False, placeholder='(not set)'),
+        action.help,
+    )
+
+
+def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotation_table=True,
+                   map_initially_visible=False, time_initially_visible=False,
+                   eigenvec_columns=None, annotation_desc=None):
+    """Settings-tab content: the panel show/hide checkboxes, the Equivalent
+    command generator, then *every* CLI option grouped into bordered category
+    cards, + a Refresh (relaunch) button.
 
     Unlike the loader panels — which only exist while their file is missing —
     this lists the file/column parameters too, and it is always present. That
     makes it the one place to change e.g. --latitude/--longitude/--time on an
     app whose data is already loaded.
+
+    show_map_plot/show_time_plot/show_annotation_table: whether each panel's
+    data is loaded at all (so its checkbox is enabled). map_initially_visible/
+    time_initially_visible: whether --latitude/--longitude/--time happened to
+    already resolve, i.e. whether that panel starts out checked.
+    eigenvec_columns/annotation_desc: the already-loaded files' own columns,
+    for the eigenvecID/annotationID dropdowns (see _column_dropdown_row).
     """
     by = _actions_by_dest()
 
+    # eigenvecID/annotationID get a dropdown of real columns instead of the
+    # generic text field _field_component would otherwise build for them.
+    annotation_columns_raw = (
+        annotation_desc['Description'].dropna().tolist() if annotation_desc is not None else []
+    )
+    _id_column_rows = {
+        'eigenvecID': _column_dropdown_row('eigenvecID', args, eigenvec_columns, by),
+        'annotationID': _column_dropdown_row('annotationID', args, annotation_columns_raw, by),
+    }
+
     def rows(dests):
         # Strip leading '--' from CLI option names for cleaner display.
-        return [_labeled_row(by[d].option_strings[0].lstrip('-'),
-                             _field_component(by[d], args, 'settings-arg'), by[d].help)
-                for d in dests if d in by]
+        return [
+            _id_column_rows[d] if d in _id_column_rows else
+            _labeled_row(by[d].option_strings[0].lstrip('-'),
+                        _field_component(by[d], args, 'settings-arg'), by[d].help)
+            for d in dests if d in by
+        ]
 
-    other = [d for d in all_arg_names() if d not in PRIMARY_ARGS]
+    def section(title, dests):
+        return dbc.Card([
+            dbc.CardHeader(title),
+            dbc.CardBody(rows(dests)),
+        ], className='mb-3')
+
+    categorized = (_SETTINGS_EIGENVEC_FIELDS + _SETTINGS_SESSION_FIELDS
+                  + _SETTINGS_ANNOTATION_FIELDS + _SETTINGS_AESTHETICS_FIELDS
+                  + _SETTINGS_SERVER_FIELDS + _SETTINGS_LIVE_ONLY_FIELDS)
+    # No "Rest" catch-all card any more — every CLI option has a home above
+    # (or is live-only, see _SETTINGS_LIVE_ONLY_FIELDS). A newly added CLI
+    # argument that isn't added to one of those lists would otherwise just
+    # silently vanish from this tab, so this stays loud about it instead.
+    uncategorized = [d for d in all_arg_names() if d not in categorized]
+    assert not uncategorized, f"Uncategorized Settings-tab field(s): {uncategorized}"
+
+    panels_card = dbc.Card([
+        dbc.CardHeader('Panels visibility'),
+        dbc.CardBody(
+            html.Div([
+                _settings_show_checkbox('PCA plot', 'settings2-show-pca', True, True),
+                _settings_show_checkbox('Map', 'settings2-show-map', map_initially_visible, show_map_plot),
+                _settings_show_checkbox('Time plot', 'settings2-show-time', time_initially_visible, show_time_plot),
+                _settings_show_checkbox('Annotation table', 'settings2-show-table', True, show_annotation_table),
+            ], style={'display': 'flex', 'gap': '24px', 'flexWrap': 'wrap', 'alignItems': 'center'}),
+        ),
+    ], className='mb-3')
+
+    # Panels visibility and Aesthetics are each the first card of their own
+    # column, so they land on the same row (alignItems: 'flex-start' on the
+    # [left_column, right_column] row below) without any extra positioning.
+    left_column = html.Div([
+        panels_card,
+        section('Eigenvector file', _SETTINGS_EIGENVEC_FIELDS),
+        section('Annotation file', _SETTINGS_ANNOTATION_FIELDS),
+        section('Session file', _SETTINGS_SESSION_FIELDS),
+    ], style={'flex': '1 1 0', 'minWidth': '0'})
+
+    right_column = html.Div([
+        dbc.Card([
+            dbc.CardHeader('Aesthetics'),
+            dbc.CardBody(
+                [_legend_row(args), _hover_detailed_row(args)] + rows(_SETTINGS_AESTHETICS_FIELDS)
+            ),
+        ], className='mb-3'),
+        section('Server', _SETTINGS_SERVER_FIELDS),
+    ], style={'flex': '1 1 0', 'minWidth': '0'})
+
     return html.Div(
         [
             html.Div(
                 [
-                    html.H4('Settings', className='mt-3'),
+                    # paddingLeft/paddingRight match Bootstrap's own Card
+                    # padding (CardHeader/CardBody inset their text ~1rem from
+                    # the border) so this title lines up with the section
+                    # boxes' own text below, not their outer edge.
+                    html.Div(
+                        [
+                            html.H4('Settings', className='mt-3', style={'marginBottom': 0}),
+                            _top_actions(),
+                        ],
+                        style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
+                              'flexWrap': 'wrap', 'gap': '12px', 'paddingLeft': '1rem', 'paddingRight': '1rem'},
+                    ),
                     html.P('Every parameter, including those set while loading. '
                            'Click Refresh to relaunch with the current values.',
-                           className='text-muted'),
-                    html.H6('Eigenvec', className='mt-3 text-muted'),
-                    *rows(EIGENVEC_FIELDS),
-                    html.H6('Annotation', className='mt-4 text-muted'),
-                    *rows(ANNOTATION_FIELDS),
-                    html.H6('Other options', className='mt-4 text-muted'),
-                    *rows(other),
-                    html.Div(dbc.Button('Refresh', id='settings-apply-btn', color='primary',
-                                        n_clicks=0), className='mt-3'),
-                    html.Div(id='settings-status', className='mt-2'),
+                           className='text-muted', style={'paddingLeft': '1rem'}),
+                    # Right by Refresh (top of the tab, see _top_actions) rather
+                    # than at the very bottom — the "Starting…" spinner it shows
+                    # on click needs to be visible without scrolling down past
+                    # every category card first.
+                    html.Div(id='settings-status', style={'paddingLeft': '1rem', 'marginBottom': '8px'}),
+                    _command_modal(),
+                    html.Div(
+                        [left_column, right_column],
+                        style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '16px'},
+                    ),
                 ],
-                style={'maxHeight': 'calc(100vh - 120px)', 'overflowY': 'auto', 'paddingRight': '8px',
-                       'maxWidth': '760px'},
+                style={'maxHeight': 'calc(100vh - 120px)', 'overflowY': 'auto', 'paddingRight': '8px'},
             ),
         ],
     )

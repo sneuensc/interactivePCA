@@ -181,7 +181,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                 id='colorscale-dropdown-modal',
                 options=[{'label': cs, 'value': cs} for cs in ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Blues', 'Reds', 'Greens', 'YlOrRd', 'RdYlBu']],
                 value=colorscale,
-                clearable=False,
+                clearable=False, searchable=False,
                 style={'width': '200px', 'display': 'none' if not is_continuous else 'block'}
             )
             
@@ -303,7 +303,7 @@ def register_aesthetics_callbacks(app, args, df, annotation_desc):
                                     {'label': 'RdYlGn', 'value': 'RdYlGn'},
                                 ],
                                 value=colorscale,
-                                clearable=False,
+                                clearable=False, searchable=False,
                                 style={'width': '100%', 'fontSize': '12px'}
                             )
                         ], style={

@@ -25,7 +25,8 @@ EMPTY_SELECTION = ['__time_window_empty__']
 
 
 def register_selection_callbacks(app, df, annotation_desc, show_annotation_table=True, show_map_plot=True,
-                                 show_time_plot=True, ANNOTATION_TIME=None):
+                                 show_time_plot=True, time_invert_columns=frozenset(),
+                                 time_rotate_columns=frozenset()):
     """
     Register all selection-related callbacks.
 
@@ -36,8 +37,11 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         show_annotation_table: Whether annotation table UI is rendered
         show_map_plot: Whether map plot is rendered and should receive callbacks
         show_time_plot: Whether the time plot is rendered and should receive callbacks
-        ANNOTATION_TIME: The actual --time column (or None) — its plot axis is
-            reversed (layouts/__init__.py), so the time-slice slider mirrors it
+        time_invert_columns: Continuous columns whose time-plot x-axis starts
+            reversed by default (layouts/__init__.py renders the same set for
+            the initial figure) — see data_loader.resolve_column_set
+        time_rotate_columns: Continuous columns whose time-plot starts with
+            x/y swapped by default — same mechanism as time_invert_columns
     """
     
     @app.callback(
@@ -314,16 +318,6 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             except Exception as e:
                 return dash.no_update, dash.no_update, f"Query error: {str(e)}"
     
-    @app.callback(
-        Output('legend-toggle-container', 'style'),
-        Input('dropdown-group', 'value')
-    )
-    def update_legend_visibility(group):
-        """Show/hide legend toggle based on grouping."""
-        if group == 'none' or group not in df.columns:
-            return {'display': 'none'}
-        return {'display': 'flex', 'alignItems': 'center'}
-
     if show_annotation_table:
         @app.callback(
             Output('pca-annotation-table', 'rowData'),
@@ -596,10 +590,23 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             prevent_initial_call=True
         )
         def auto_set_time_invert_default(time_col):
-            """Default 'Invert' to on for the actual --time column, off for any
-            other variable — the user can still toggle it freely afterwards;
+            """Default 'Invert' to on for any column listed in
+            --time-invert-columns (just the --time column if that wasn't
+            given — see data_loader.resolve_column_set), off for any other
+            variable — the user can still toggle it freely afterwards;
             switching variables again just re-applies this default."""
-            return time_col == ANNOTATION_TIME
+            return time_col in time_invert_columns
+
+        @app.callback(
+            Output('time-rotate-toggle', 'value'),
+            Input('time-variable', 'value'),
+            prevent_initial_call=True
+        )
+        def auto_set_time_rotate_default(time_col):
+            """Default 'Rotate' to on for any column listed in
+            --time-rotate-columns, off for any other variable — same
+            mechanism as auto_set_time_invert_default above."""
+            return time_col in time_rotate_columns
 
         @app.callback(
             Output('time-window-range', 'reverse'),
@@ -723,7 +730,39 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
                     False, False, False, False, _TIME_WINDOW_ROW_VISIBLE)
 
     # === Selection store to plot callbacks ===
-    
+
+    def _apply_selectedpoints(fig, selected_ids):
+        """Patch `selectedpoints` on every trace of an already-built figure
+        dict to match selection-store, in place — shared by
+        update_pca_selection/update_map_selection so a lasso drag (which
+        fires this continuously) only ever touches this one property
+        instead of Dash resending/rebuilding the whole figure from Python.
+
+        selected_arr is hoisted out of the per-trace loop (the plain `list(set)`
+        conversion was previously redone on every single trace, pointlessly,
+        for every firing — real cost with many groups/traces). customdata is
+        cast to str via a vectorised NumPy op (`.astype(str)`) rather than a
+        Python-level `[str(cd) for cd in customdata]` loop — the per-point
+        str() call overhead was the dominant cost for large point counts, and
+        is identical here since every trace's customdata is a flat ID series
+        (see plots.py's `customdata=df['id']`), never nested per-point lists.
+        """
+        if not selected_ids:
+            # No selection — remove selectedpoints so Plotly shows all points normally
+            for trace in fig.get('data', []):
+                trace.pop('selectedpoints', None)
+            return fig
+        selected_arr = np.array(list(set(str(sid) for sid in selected_ids)))
+        for trace in fig.get('data', []):
+            customdata = trace.get('customdata', [])
+            if len(customdata) > 0:
+                customdata_str = np.asarray(customdata).astype(str)
+                mask = np.isin(customdata_str, selected_arr)
+                trace['selectedpoints'] = np.where(mask)[0].tolist()
+            else:
+                trace.pop('selectedpoints', None)
+        return fig
+
     @app.callback(
         Output('pca-plot', 'figure', allow_duplicate=True),
         Input('selection-store', 'data'),
@@ -734,22 +773,8 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
         """Update PCA plot to highlight selected rows."""
         if current_fig is None:
             return {}
-        if not selected_ids:
-            # No selection — remove selectedpoints so Plotly shows all points normally
-            for trace in current_fig.get('data', []):
-                trace.pop('selectedpoints', None)
-            return current_fig
-        selected_set = set(str(sid) for sid in selected_ids)
-        for trace in current_fig.get('data', []):
-            customdata = trace.get('customdata', [])
-            if len(customdata) > 0:
-                customdata_str = np.array([str(cd) for cd in customdata])
-                mask = np.isin(customdata_str, list(selected_set))
-                trace['selectedpoints'] = np.where(mask)[0].tolist()
-            else:
-                trace.pop('selectedpoints', None)
-        return current_fig
-    
+        return _apply_selectedpoints(current_fig, selected_ids)
+
     if show_map_plot:
         @app.callback(
             Output('pca-map-plot', 'figure', allow_duplicate=True),
@@ -761,20 +786,7 @@ def register_selection_callbacks(app, df, annotation_desc, show_annotation_table
             """Update map plot to highlight selected rows."""
             if current_fig is None:
                 return {}
-            if not selected_ids:
-                for trace in current_fig.get('data', []):
-                    trace.pop('selectedpoints', None)
-                return current_fig
-            selected_set = set(str(sid) for sid in selected_ids)
-            for trace in current_fig.get('data', []):
-                customdata = trace.get('customdata', [])
-                if len(customdata) > 0:
-                    customdata_str = np.array([str(cd) for cd in customdata])
-                    mask = np.isin(customdata_str, list(selected_set))
-                    trace['selectedpoints'] = np.where(mask)[0].tolist()
-                else:
-                    trace.pop('selectedpoints', None)
-            return current_fig
+            return _apply_selectedpoints(current_fig, selected_ids)
     
     # NOTE: update_time_selection is intentionally absent.
     # update_time_histogram (plots.py) already has selection-store as an Input

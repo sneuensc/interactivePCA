@@ -35,19 +35,6 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         ANNOTATION_TIME: Time column name (or None)
         annotation_desc: Annotation description DataFrame
     """
-    
-    # Auto-check Show Legend when switching to a multi-value or continuous group
-    @app.callback(
-        Output('pca-legend-toggle', 'value'),
-        Input('dropdown-group', 'value'),
-        prevent_initial_call=True
-    )
-    def auto_set_legend(group):
-        if group == 'none' or group not in df.columns:
-            return []
-        if df[group].dtype.kind in 'fi':          # continuous variable
-            return ['show_legend']
-        return ['show_legend'] if df[group].nunique() > 1 else []
 
     # Callback to show/hide Z-axis dropdown based on 3D toggle
     @app.callback(
@@ -69,17 +56,18 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         Input('dropdown-group', 'value'),
         Input('pca-3d-toggle', 'value'),
         Input('marker-aesthetics-store', 'data'),
-        Input('pca-legend-toggle', 'value'),   # promoted from State so auto_set_legend is seen immediately
+        Input('settings2-legend-mode', 'value'),
         Input('dropdown-group-symbol', 'value'),
         Input('symbol-aesthetics-store', 'data'),
         Input('save-trigger-store', 'data'),
+        Input('legend-target-store', 'data'),
         State('effective-hover-detailed', 'data'),
         State('selected-annotation-columns', 'data'),
         State('selection-store', 'data'),
         prevent_initial_call=False
     )
-    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, legend_toggle,
-                                   group_symbol, symbol_store, _save_tick,
+    def update_pca_plot_structure(pc_x, pc_y, pc_z, group, is_3d, aesthetics_store, legend_mode,
+                                   group_symbol, symbol_store, _save_tick, legend_target,
                                    hover_detailed, selected_cols, selected_ids):
         """Regenerate PCA figure when any structural or aesthetic parameter changes."""
         import json
@@ -106,12 +94,24 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             and df[group].dtype.kind in 'fi'
         )
 
+        # The group-colour legend only ever shows on ONE active plot at a time
+        # (see legend-target-store / callbacks/settings2.py:_register_legend_target)
+        # — normally this one, but it relocates to the time or map plot if
+        # this one is hidden. The Settings tab's Legend mode
+        # (settings2-legend-mode) overrides that: 'none' suppresses it
+        # everywhere, 'everywhere' bypasses the relocation and shows it on
+        # every active plot at once, 'once' is the relocating default above.
+        # The continuous colourbar is a separate, always-local concept (not
+        # "the legend" being relocated), so it is not gated on this either way.
+        if legend_mode == 'none':
+            is_legend_target = False
+        elif legend_mode == 'everywhere':
+            is_legend_target = True
+        else:
+            is_legend_target = legend_target in (None, 'pca')
         show_legend = False
         if is_categorical:
-            n_unique = df[group].nunique()
-            show_legend = n_unique > 1
-            if legend_toggle is not None:
-                show_legend = show_legend and ('show_legend' in legend_toggle)
+            show_legend = df[group].nunique() > 1 and is_legend_target
         elif is_continuous:
             show_legend = True
 
@@ -324,47 +324,78 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('symbol-aesthetics-store', 'data'),
             Input('save-trigger-store', 'data'),
             Input('map-type-toggle', 'value'),
-            Input('settings2-map-lat', 'value'),
-            Input('settings2-map-lon', 'value'),
+            Input('dropdown-map-x', 'value'),
+            Input('dropdown-map-y', 'value'),
+            Input('legend-target-store', 'data'),
+            Input('settings2-legend-mode', 'value'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             State('selection-store', 'data'),
             State('map-view-store', 'data'),
         )
         def update_map_plot(group, aesthetics_store, group_symbol, symbol_store, _save_tick,
-                            map_type, lat_col, lon_col, hover_detailed, selected_cols, selection_store, map_view):
-            # lat_col/lon_col come from the Settings 2 tab's live column pickers
-            # (layouts/__init__.py:create_settings2_tab), prefilled with
-            # ANNOTATION_LAT/ANNOTATION_LONG — falling back to those here too in
-            # case the dropdowns are ever cleared. Either can still be None (no
-            # --latitude/--longitude given and nothing picked yet); the map
-            # builders already degrade to a "coordinates not available"
-            # placeholder figure in that case rather than erroring.
-            lat_col = lat_col or ANNOTATION_LAT
+                            map_type, lon_col, lat_col, legend_target, legend_mode,
+                            hover_detailed, selected_cols, selection_store, map_view):
+            # dropdown-map-x/-y are prefilled from ANNOTATION_LONG/ANNOTATION_LAT
+            # but start empty if those never resolved (no --latitude/--longitude
+            # given) — the map panel can still exist (show_map_plot only needs
+            # annotation data at all), so this is how the user picks real
+            # coordinate columns live once annotation is loaded.
             lon_col = lon_col or ANNOTATION_LONG
+            lat_col = lat_col or ANNOTATION_LAT
             aesthetics = get_aesthetics_for_group(args, group, df, aesthetics_store)
             aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
             gs = group_symbol if group_symbol and group_symbol != 'none' else None
             sym_aest = get_symbol_map_for_group(gs, df, symbol_store) if gs else {}
             sym_tuple = dict_of_dicts_to_tuple(sym_aest) if sym_aest else None
-            # 'tiles' → interactive Scattermap basemap; anything else → Scattergeo
-            # (default), which matches the PCA/time plot rendering.
-            use_tiles = map_type == 'tiles'
-            map_builder = create_geographical_map if use_tiles else generate_map_fig_scattergeo
-            fig = map_builder(
-                group=group,
-                aesthetics_tuple=aesthetics_tuple,
-                legend=False,
-                lat_col=lat_col,
-                lon_col=lon_col,
-                group_symbol=gs,
-                symbol_aest_tuple=sym_tuple,
-            )
             is_categorical = (
                 group != 'none'
                 and group in df.columns
                 and df[group].dtype.kind not in 'fi'
             )
+            is_continuous = (
+                group != 'none'
+                and group in df.columns
+                and df[group].dtype.kind in 'fi'
+            )
+            # The group-colour legend (categorical case) only ever shows on
+            # ONE active plot at a time — this one when legend-target-store
+            # points here (PCA, and possibly time, hidden — see
+            # callbacks/settings2.py:_register_legend_target). The Settings
+            # tab's Legend mode overrides that: 'none' suppresses it
+            # everywhere, 'everywhere' bypasses the relocation and shows it
+            # here regardless, 'once' is the relocating default above. The
+            # continuous colourbar is a separate, always-local concept
+            # (matching the PCA plot's own treatment) rather than something
+            # being relocated, so it is not gated on legend_target either way.
+            if legend_mode == 'none':
+                is_map_legend_target = False
+            elif legend_mode == 'everywhere':
+                is_map_legend_target = True
+            else:
+                is_map_legend_target = legend_target == 'map'
+            show_legend_here = bool(
+                is_continuous
+                or (is_map_legend_target and is_categorical and df[group].nunique() > 1)
+            )
+            # 'tiles' → interactive Scattermap basemap; 'none' → the same
+            # Scattergeo projection with every basemap layer switched off
+            # (just the points, no geography); anything else (the default,
+            # 'map') → Scattergeo with the full basemap.
+            use_tiles = map_type == 'tiles'
+            map_builder = create_geographical_map if use_tiles else generate_map_fig_scattergeo
+            builder_kwargs = dict(
+                group=group,
+                aesthetics_tuple=aesthetics_tuple,
+                legend=show_legend_here,
+                lat_col=lat_col,
+                lon_col=lon_col,
+                group_symbol=gs,
+                symbol_aest_tuple=sym_tuple,
+            )
+            if not use_tiles:
+                builder_kwargs['blank'] = (map_type == 'none')
+            fig = map_builder(**builder_kwargs)
             fig.update_layout(
                 autosize=True,
                 margin=dict(l=0, r=0, t=0, b=0),
@@ -435,21 +466,47 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             Input('save-trigger-store', 'data'),
             Input('time-window-store', 'data'),
             Input('time-invert-toggle', 'value'),
+            Input('time-rotate-toggle', 'value'),
             Input('time-group-mode', 'value'),
             Input('time-bin-size', 'value'),
+            Input('legend-target-store', 'data'),
+            Input('settings2-legend-mode', 'value'),
             State('hover-detailed', 'data'),
             State('selected-annotation-columns', 'data'),
             prevent_initial_call=False
         )
         def update_time_histogram(group, viz_mode, time_variable, selection_store, aesthetics_store,
-                                   group_symbol, symbol_store, _save_tick, time_window, invert_axis,
-                                   group_mode, bin_size, hover_detailed, selected_cols):
+                                   group_symbol, symbol_store, _save_tick, time_window, invert_axis, rotate,
+                                   group_mode, bin_size, legend_target, legend_mode,
+                                   hover_detailed, selected_cols):
             # 'No group' / 'Group' / 'Group with name' (Scatter/Violin only —
             # Distribution/Overlay never split or label by group).
             per_group = group_mode != 'none'
             show_group_names = group_mode == 'group_named'
             if time_variable is None or time_variable not in df.columns:
                 return {}
+
+            # The group-colour legend only ever shows on ONE active plot at a
+            # time (see legend-target-store / callbacks/settings2.py's
+            # _register_legend_target) — this relocates it here when the PCA
+            # plot (its usual home) is hidden. The Settings tab's Legend mode
+            # overrides that: 'none' suppresses it everywhere, 'everywhere'
+            # bypasses the relocation and shows it here regardless, 'once' is
+            # the relocating default above. Only meaningful in the two view
+            # modes that actually draw one trace per category (scatter's "per
+            # group" mode, violin's per-group mode); _has_category_legend
+            # below tracks whether either used it.
+            is_categorical_group = group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi'
+            if legend_mode == 'none':
+                is_time_legend_target = False
+            elif legend_mode == 'everywhere':
+                is_time_legend_target = True
+            else:
+                is_time_legend_target = legend_target == 'time'
+            show_legend_here = bool(
+                is_time_legend_target and is_categorical_group and df[group].nunique() > 1
+            )
+            _has_category_legend = False
 
             time_vals = df[time_variable].dropna()
             if time_vals.empty:
@@ -539,6 +596,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     elif per_group:
                         # Categorical variable, "Per group" on — one horizontal strip per group
                         _cat_strip = True
+                        _has_category_legend = show_legend_here
                         color_map = aesthetics.get('color', {})
                         size_map = aesthetics.get('size', {})
                         opacity_map = aesthetics.get('opacity', {})
@@ -578,7 +636,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                                 customdata=subset_ids,
                                 hovertemplate='<b>Group:</b> ' + str(val) + '<br><b>ID:</b> %{customdata}<br><extra></extra>',
                                 name=str(val),
-                                showlegend=False
+                                showlegend=show_legend_here
                             ))
                     else:
                         # Categorical variable, "Per group" off — keep one
@@ -638,7 +696,6 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             zeroline=False,
                             showticklabels=bool(show_group_names),
                         ),
-                        showlegend=False,
                         autosize=True,
                         dragmode='lasso',
                         margin=dict(l=50, r=20, t=40, b=40),
@@ -661,6 +718,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
 
                 if (per_group and group != 'none' and group in df.columns
                         and df[group].dtype.kind not in 'fi'):
+                    _has_category_legend = show_legend_here
                     group_vals = df.loc[time_vals.index, group]
                     unique_vals = [val for val in group_vals.unique() if not pd.isna(val)]
                     order = aesthetics.get('order')
@@ -680,12 +738,11 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             box_visible=True,
                             meanline_visible=True,
                             points=False,
-                            showlegend=False,
+                            showlegend=show_legend_here,
                         ))
                     fig.update_layout(
                         xaxis_title=time_variable,
                         yaxis=dict(showgrid=True, zeroline=False, showticklabels=bool(show_group_names)),
-                        showlegend=False,
                         autosize=True,
                         margin=dict(l=80, r=20, t=40, b=40),
                     )
@@ -745,9 +802,16 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                     autosize=True
                 )
 
+            # Widen the right margin and reserve the legend box exactly when a
+            # branch above actually drew one (_has_category_legend) — mirrors
+            # the PCA plot's own margin/legend handling. A plain dict() here
+            # is harmless when no trace has showlegend=True: nothing renders.
+            _r_margin = 170 if _has_category_legend else 20
             fig.update_layout(
                 template='plotly_white',
-                margin=dict(l=50, r=20, t=40, b=40),
+                margin=dict(l=50, r=_r_margin, t=40, b=40),
+                legend=dict(x=1.02, y=1.0, xanchor='left', yanchor='top',
+                           traceorder='reversed', title=dict(text=group if _has_category_legend else '')),
                 dragmode='lasso',
                 hoverlabel=dict(
                     bgcolor='white',
@@ -770,16 +834,40 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
 
             # Shaded band showing where the time-slice window currently sits —
             # purely a visual anchor; the selection highlighting itself comes
-            # from selection-store like any other selection source.
+            # from selection-store like any other selection source. Time sits
+            # on the x-axis normally, the y-axis once rotated — add_hrect vs
+            # add_vrect picks the matching axis directly, rather than relying
+            # on the generic trace-data swap below (which only touches data
+            # arrays, not shapes).
             if time_window and time_window.get('enabled') and time_window.get('lo') is not None:
-                fig.add_vrect(x0=time_window['lo'], x1=time_window['hi'],
-                              fillcolor='LightSalmon', opacity=0.15,
-                              layer='below', line_width=0)
+                if rotate:
+                    fig.add_hrect(y0=time_window['lo'], y1=time_window['hi'],
+                                  fillcolor='LightSalmon', opacity=0.15,
+                                  layer='below', line_width=0)
+                else:
+                    fig.add_vrect(x0=time_window['lo'], x1=time_window['hi'],
+                                  fillcolor='LightSalmon', opacity=0.15,
+                                  layer='below', line_width=0)
 
             # Apply hover text formatting
             fig_dict = fig.to_dict()
             group_colors = aesthetics_store.get(group, {}).get('color', {}) if aesthetics_store and group else {}
             fig_dict = update_figure_hover_templates(fig_dict, df, annotation_desc, group, hover_detailed, selected_cols, group_colors, 'time', group_symbol=gs)
+
+            # "Rotate" — swap x/y on every trace and the xaxis/yaxis layout
+            # dicts wholesale (so axis title, tick labels/range for the
+            # per-group strip mode, and any autorange='reversed' from Invert
+            # all move to the other axis together). Histogram infers its
+            # orientation from which of x/y holds data when neither trace
+            # sets it explicitly, so swapping the arrays alone rotates it;
+            # Violin sets orientation explicitly and so needs it flipped too.
+            if rotate:
+                for trace in fig_dict.get('data', []):
+                    trace['x'], trace['y'] = trace.get('y'), trace.get('x')
+                    if trace.get('orientation'):
+                        trace['orientation'] = 'h' if trace['orientation'] == 'v' else 'v'
+                layout = fig_dict.setdefault('layout', {})
+                layout['xaxis'], layout['yaxis'] = layout.get('yaxis', {}), layout.get('xaxis', {})
 
             # Apply selectedpoints for scatter mode (histogram bins don't support it).
             # Done here rather than in a separate callback to avoid a race condition

@@ -58,13 +58,13 @@ def test_compose_argv_values_and_flags():
         'eigenvec': 'data/x.eigenvec',
         'annotation': 'data/x.anno',
         'latitude': 'lat',
-        'time_invert': True,       # store_true flag
+        'dev': True,                # store_true flag
         'point_size': 8,           # equals default -> omitted
         'point_symbol': 'square',  # differs from default 'circle'
     })
     assert '--eigenvec' in argv and 'data/x.eigenvec' in argv
     assert '--latitude' in argv and 'lat' in argv
-    assert '--time-invert' in argv           # flag emitted, no value
+    assert '--dev' in argv                    # flag emitted, no value
     assert '--point-size' not in argv         # default value omitted
     assert '--point-symbol' in argv and 'square' in argv
 

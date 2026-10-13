@@ -568,7 +568,7 @@ create_geographical_map = generate_map_fig_scattermap
 
 @lru_cache(maxsize=32)
 def _generate_map_fig_scattergeo_cached(group, aesthetics_tuple, legend=True, lat_col=None, lon_col=None,
-                                group_symbol=None, symbol_aest_tuple=None):
+                                group_symbol=None, symbol_aest_tuple=None, blank=False):
     """Geographic map using Scattergeo (SVG "geo" subplot, cached).
 
     Scattergeo shares the 2D scatter's marker semantics — native symbols,
@@ -576,6 +576,12 @@ def _generate_map_fig_scattergeo_cached(group, aesthetics_tuple, legend=True, la
     so it stays visually consistent with the PCA and time plots. The trade-off
     versus Scattermap is a projected vector basemap (coastlines/countries)
     instead of interactive raster/vector map tiles.
+
+    blank=True keeps the same equirectangular lon/lat projection (so points
+    still plot at the right place and pane-fill/view-bbox logic keeps working
+    unchanged) but switches off every basemap layer (land/ocean/coastlines/
+    countries) — the "None" background option, for plotting just the points
+    with no geography drawn underneath.
 
     Uses the global _df DataFrame.
     """
@@ -650,10 +656,10 @@ def _generate_map_fig_scattergeo_cached(group, aesthetics_tuple, legend=True, la
     # simple linear extension of the non-binding axis.
     geo = dict(
         projection_type='equirectangular',
-        showland=True, landcolor='rgb(243, 243, 243)',
-        showocean=True, oceancolor=_MAP_OCEAN_COLOR,
-        showcoastlines=True, coastlinecolor='rgb(204, 204, 204)',
-        showcountries=True, countrycolor='rgb(210, 210, 210)', countrywidth=0.5,
+        showland=not blank, landcolor='rgb(243, 243, 243)',
+        showocean=not blank, oceancolor=_MAP_OCEAN_COLOR,
+        showcoastlines=not blank, coastlinecolor='rgb(204, 204, 204)',
+        showcountries=not blank, countrycolor='rgb(210, 210, 210)', countrywidth=0.5,
         showframe=False, bgcolor='rgba(0,0,0,0)',
     )
     # Fit the view to the full sample range (min/max, with a small margin) so
@@ -670,8 +676,10 @@ def _generate_map_fig_scattergeo_cached(group, aesthetics_tuple, legend=True, la
         geo['lonaxis'] = dict(range=[lon_lo - pad_lon, lon_hi + pad_lon])
     # Plotly centres the map within the pane and letterboxes when the projected
     # aspect differs from the pane. Paint the figure background the ocean colour
-    # so the momentary margins (before the fill runs) read as sea.
-    fig.update_layout(geo=geo, paper_bgcolor=_MAP_OCEAN_COLOR, plot_bgcolor=_MAP_OCEAN_COLOR)
+    # so the momentary margins (before the fill runs) read as sea — except when
+    # blank, which has no "sea" to simulate and should just read as plain white.
+    _bg = 'white' if blank else _MAP_OCEAN_COLOR
+    fig.update_layout(geo=geo, paper_bgcolor=_bg, plot_bgcolor=_bg)
     return fig
 
 

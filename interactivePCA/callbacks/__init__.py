@@ -12,6 +12,7 @@ from .hover_details import register_hover_details_callback
 from .legend_sync import register_legend_sync_callbacks
 from .session import register_session_callbacks
 from .settings2 import register_settings2_callbacks
+from ..data_loader import resolve_column_set
 
 
 def register_all_callbacks(app, args, df, pcs, annotation_desc,
@@ -37,6 +38,17 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
     show_map_plot = show_annotation_table
     show_time_plot = show_annotation_table
 
+    # Which continuous columns' time-plot x-axis starts reversed — defaults to
+    # just the resolved --time column unless --time-invert-columns opts into
+    # an explicit list (see data_loader.resolve_column_set / app.py's own
+    # identical resolution for the initial figure).
+    time_invert_columns = resolve_column_set(
+        args.time_invert_columns, annotation_desc, fallback_columns=(ANNOTATION_TIME,)
+    )
+    # Which continuous columns' time-plot starts with x/y swapped — no
+    # implicit default, just whatever --time-rotate-columns explicitly lists.
+    time_rotate_columns = resolve_column_set(args.time_rotate_columns, annotation_desc)
+
     register_selection_callbacks(
         app,
         df,
@@ -44,7 +56,8 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
         show_annotation_table=show_annotation_table,
         show_map_plot=show_map_plot,
         show_time_plot=show_time_plot,
-        ANNOTATION_TIME=ANNOTATION_TIME,
+        time_invert_columns=time_invert_columns,
+        time_rotate_columns=time_rotate_columns,
     )
     register_plot_callbacks(
         app,
@@ -77,6 +90,7 @@ def register_all_callbacks(app, args, df, pcs, annotation_desc,
     )
     register_settings2_callbacks(
         app,
+        args,
         show_map_plot=show_map_plot,
         show_time_plot=show_time_plot,
         show_annotation_table=show_annotation_table,

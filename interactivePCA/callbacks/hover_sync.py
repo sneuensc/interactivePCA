@@ -51,15 +51,43 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
             (triggered ? triggered.prop_id.split('.')[0] : null);
         var NO_UPDATE = window.dash_clientside.no_update;
 
-        // Break feedback loop caused by our own simulated map hover
-        if (window._hoverSyncSkip && window._hoverSyncSkip === triggeredId) {{
-            window._hoverSyncSkip = null;
-            return NO_UPDATE;
-        }}
-
         var allPlotIds = {all_plot_ids_js};
         var hoverDataMap = {hoverdata_map_js};
         var hoverData = hoverDataMap[triggeredId];
+
+        // Resolve what this trigger actually represents up front — null
+        // means "nothing hovered" (unhover/cleared), otherwise the sample id.
+        var hoveredId = null;
+        if (hoverData && hoverData.points && hoverData.points.length) {{
+            var _pt = hoverData.points[0];
+            var _cd = _pt.customdata;
+            var _candidate = Array.isArray(_cd) ? String(_cd[0]) : String(_cd);
+            if (_candidate && _candidate !== 'undefined' && _candidate !== 'null') {{
+                hoveredId = _candidate;
+            }}
+        }}
+
+        // Break the feedback loop caused by our own simulated hover(s) — by
+        // VALUE (did we just tell this exact plot to show this exact id, or
+        // to clear?), not by timing/ordering. A previous version used a
+        // "did I just fire a simulated hover" flag, cleared once the
+        // expected echo arrived — but one real hover simulates TWO echoes at
+        // once (the two plots NOT hovered), and a flag keyed only by timing
+        // assumes those two echoes arrive in a predictable order relative to
+        // each other, which Plotly/the browser doesn't actually guarantee.
+        // Comparing the plot's own last-synced VALUE has no such assumption:
+        // it's a plain equality check, correct regardless of how many
+        // echoes are in flight or in what order they resolve.
+        window._hoverSyncLast = window._hoverSyncLast || {{}};
+        if ((triggeredId in window._hoverSyncLast) &&
+                window._hoverSyncLast[triggeredId] === hoveredId) {{
+            delete window._hoverSyncLast[triggeredId];
+            return NO_UPDATE;
+        }}
+
+        function markSynced(plotId, idOrNull) {{
+            window._hoverSyncLast[plotId] = idOrNull;
+        }}
 
         // ── helpers ──────────────────────────────────────────────────────────
 
@@ -76,6 +104,37 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                 if (plotDiv.data[i].name === '__hover_highlight__') return i;
             }}
             return -1;
+        }}
+
+        // ID -> {{trace, point}} index, so updateHighlight (called on every
+        // hover-move, i.e. continuously while the mouse is over a plot) is
+        // O(1) instead of linearly rescanning every point of every trace on
+        // every single call — the latter visibly lagged once a plot held
+        // more than a few thousand points. Cached on plotDiv, keyed by
+        // reference equality of plotDiv.data: our OWN Plotly.restyle calls
+        // (repositioning __hover_highlight__) mutate traces in place and
+        // never replace the data array, so the cache survives those; a real
+        // Dash-driven figure re-render (new group/axes/selection) always
+        // hands Plotly.react a brand new data array, which invalidates it.
+        function getIdIndex(plotDiv) {{
+            if (plotDiv._hoverIdIndexFor === plotDiv.data) return plotDiv._hoverIdIndex;
+            var index = {{}};
+            var data = plotDiv.data;
+            for (var ti = 0; ti < data.length; ti++) {{
+                if (data[ti].name === '__hover_highlight__') continue;
+                var customdata = data[ti].customdata;
+                if (!customdata || !customdata.length) continue;
+                for (var pi = 0; pi < customdata.length; pi++) {{
+                    var cd = customdata[pi];
+                    var cdStr = Array.isArray(cd) ? String(cd[0]) : String(cd);
+                    // First trace/point wins on a duplicate id, same as the
+                    // original linear-scan's left-to-right `break` did.
+                    if (!(cdStr in index)) index[cdStr] = {{trace: ti, point: pi}};
+                }}
+            }}
+            plotDiv._hoverIdIndex = index;
+            plotDiv._hoverIdIndexFor = data;
+            return index;
         }}
 
         // Numeric columns arrive base64-packed as {{dtype, bdata, _inputArray}}
@@ -157,7 +216,7 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                     if (container && Plotly.Fx.loneUnhover) {{
                         Plotly.Fx.loneUnhover(container);
                     }} else if (!isGeoPlot(plotDiv)) {{
-                        window._hoverSyncSkip = plotId;
+                        markSynced(plotId, null);
                         Plotly.Fx.hover(plotDiv, {{clientX: -9999, clientY: -9999}},
                                         getMapKey(plotDiv, mapTrace));
                     }}
@@ -167,7 +226,7 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                 if (plotDiv.data[hlIdx].z !== undefined) clearData.z = [[]];
                 Plotly.restyle(plotDiv, clearData, [hlIdx]);
                 try {{
-                    window._hoverSyncSkip = plotId;
+                    markSynced(plotId, null);
                     Plotly.Fx.hover(plotDiv, []);
                 }} catch(e) {{}}
             }}
@@ -182,20 +241,12 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
             var hlIdx = findHighlightIdx(plotDiv);
             if (hlIdx === -1) return;
 
-            // find the matching trace + point
+            // find the matching trace + point (O(1) via the cached id index,
+            // not a fresh linear scan of every point of every trace)
             var data = plotDiv.data;
-            var foundTrace = -1, foundPoint = -1;
-            for (var ti = 0; ti < data.length; ti++) {{
-                if (ti === hlIdx) continue;
-                var customdata = data[ti].customdata;
-                if (!customdata || !customdata.length) continue;
-                for (var pi = 0; pi < customdata.length; pi++) {{
-                    var cd = customdata[pi];
-                    var cdStr = Array.isArray(cd) ? String(cd[0]) : String(cd);
-                    if (cdStr === hoveredId) {{ foundTrace = ti; foundPoint = pi; break; }}
-                }}
-                if (foundTrace !== -1) break;
-            }}
+            var match = getIdIndex(plotDiv)[hoveredId];
+            var foundTrace = match ? match.trace : -1;
+            var foundPoint = match ? match.point : -1;
 
             if (foundTrace === -1) {{ clearHighlight(plotId); return; }}
 
@@ -272,7 +323,7 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                             // fallback: Fx.hover with screen coords (GL maps only)
                             var canvas = getMapGL(plotDiv).getCanvas();
                             var rect   = canvas.getBoundingClientRect();
-                            window._hoverSyncSkip = plotId;
+                            markSynced(plotId, hoveredId);
                             Plotly.Fx.hover(plotDiv,
                                 {{clientX: rect.left + px.x, clientY: rect.top + px.y}},
                                 getMapKey(plotDiv, trace));
@@ -311,7 +362,7 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
                     // same guard the map branch above already uses, applied
                     // here too so a scatter/scattergl plot's own echo of this
                     // Fx.hover call isn't mistaken for a fresh real hover.
-                    window._hoverSyncSkip = plotId;
+                    markSynced(plotId, hoveredId);
                     Plotly.Fx.hover(plotDiv, [{{curveNumber: foundTrace, pointNumber: foundPoint}}]);
                 }} catch(e) {{}}
 
@@ -343,19 +394,13 @@ def register_hover_sync_callbacks(app, show_map_plot=True, show_time_plot=True):
         }})();
 
         // ── main ─────────────────────────────────────────────────────────────
+        // hoveredId (null = nothing hovered) was already resolved up top,
+        // before the echo-suppression check that needs it.
 
-        if (!hoverData || !hoverData.points || !hoverData.points.length) {{
+        if (hoveredId === null) {{
             allPlotIds.forEach(function(plotId) {{
                 if (plotId !== triggeredId) clearHighlight(plotId);
             }});
-            return NO_UPDATE;
-        }}
-
-        var pt = hoverData.points[0];
-        var cd = pt.customdata;
-        var hoveredId = Array.isArray(cd) ? String(cd[0]) : String(cd);
-
-        if (!hoveredId || hoveredId === 'undefined' || hoveredId === 'null') {{
             return NO_UPDATE;
         }}
 

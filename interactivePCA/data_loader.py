@@ -188,6 +188,45 @@ def resolve_annotation_columns(annotation_desc, args, default_id=None):
     return annotation_columns
 
 
+def resolve_column_set(raw, annotation_desc, fallback_columns=()):
+    """Resolve a comma-separated list of column names (e.g. --time-invert-columns)
+    into their abbreviated working names, via the same Description<->Abbreviation
+    lookup as resolve_annotation_columns above — each token may be given as the
+    raw/full column name or already its abbreviated working name. A token
+    already an exact abbreviation is used as-is rather than run through
+    get_abbr_of's fuzzy match against descriptions, which looks for a raw
+    name and is not guaranteed to still find its own abbreviation.
+
+    Expects short tokens (abbreviations, or raw names with no commas in them)
+    — a comma inside a raw column name would itself be misread as a
+    separator, same limitation as --dim's comma-separated column list.
+
+    raw empty/None falls back to fallback_columns as-is (already-resolved
+    abbreviations, not raw names) rather than resolving anything — the caller's
+    way of saying "the user didn't opt into this list, use the old default".
+    """
+    if not raw:
+        return set(c for c in fallback_columns if c)
+    if annotation_desc is None:
+        return set()
+    descriptions = annotation_desc['Description'].tolist()
+    abbreviations = annotation_desc['Abbreviation'].tolist()
+    abbreviation_set = set(abbreviations)
+    result = set()
+    for token in raw.split(','):
+        token = token.strip()
+        if not token:
+            continue
+        if token in abbreviation_set:
+            result.add(token)
+            continue
+        resolved = get_abbr_of(token, descriptions, abbreviations)
+        result.add(resolved if resolved else token)
+    return result
+
+    return annotation_columns
+
+
 def load_annotation(filepath, args=None):
     """
     Load and process annotation file.
@@ -287,18 +326,16 @@ def load_annotation(filepath, args=None):
     return annotation, annotation_desc, annotation_columns
 
 
-def merge_data(eigenvec, annotation, eigenvec_id_col='id', annotation_id_col=None, time_col=None, invert_time=False):
+def merge_data(eigenvec, annotation, eigenvec_id_col='id', annotation_id_col=None):
     """
     Merge eigenvector and annotation data.
-    
+
     Args:
         eigenvec: Eigenvector DataFrame
         annotation: Annotation DataFrame (optional)
         eigenvec_id_col: ID column name in eigenvec
         annotation_id_col: ID column name in annotation
-        time_col: Time column name to invert (optional)
-        invert_time: Whether to negate time values
-    
+
     Returns:
         Merged DataFrame
     """
@@ -311,9 +348,6 @@ def merge_data(eigenvec, annotation, eigenvec_id_col='id', annotation_id_col=Non
         )
     else:
         df = eigenvec.copy()
-
-    if invert_time and time_col is not None and time_col in df.columns:
-        df[time_col] = -df[time_col]
 
     # Ensure 'id' column is first
     if df.columns[0] != 'id':

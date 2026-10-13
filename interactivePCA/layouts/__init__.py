@@ -7,6 +7,8 @@ Contains:
 - create_annotation_tab: Annotation description table tab
 """
 
+import logging
+import os
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -93,7 +95,10 @@ def create_layout(args, df, pcs,
                  init_selected_ids, init_group, init_continuous, init_aesthetics,
                  dropdown_group_list, dropdown_list_continuous,
                  dropdown_group_symbol_list=None, has_embedded_annotation_cols=False,
-                 init_session=None, map_initially_visible=False, time_initially_visible=False):
+                 init_session=None, map_initially_visible=False, time_initially_visible=False,
+                 time_invert_columns=frozenset(), init_pc_x=None, init_pc_y=None,
+                 init_time_viz_mode='scatter', init_time_bin_size=None,
+                 time_rotate_columns=frozenset(), init_pc_z=None):
     """
     Create the main application layout.
     
@@ -151,6 +156,47 @@ def create_layout(args, df, pcs,
     if not init_group_symbol or init_group_symbol not in _group_symbol_options:
         init_group_symbol = 'none'
 
+    # Initial annotation columns shown in the table/hover — --annotation-columns
+    # overrides the "first 10" default with an explicit, order-preserving list
+    # (a set, like data_loader.resolve_column_set uses elsewhere, would lose
+    # the order the table/hover display it in). Each token may be given as
+    # the raw/full column name or already its abbreviated working name, same
+    # resolution as --group (see app.py's own comment on that).
+    init_selected_cols = []
+    annotation_desc_extended = None
+    if annotation_desc is not None:
+        annotation_desc_extended = annotation_desc.copy()
+        if pcs:
+            pc_rows = pd.DataFrame({
+                'Abbreviation': pcs,
+                'Description': pcs,
+                'Type': ['continuous'] * len(pcs),
+                'N_levels': [None] * len(pcs),
+                'Dropdown': ['Yes'] * len(pcs)
+            })
+            annotation_desc_extended = pd.concat([annotation_desc, pc_rows], ignore_index=True)
+
+        raw_annotation_columns = getattr(args, 'annotation_columns', '') or ''
+        if raw_annotation_columns.strip():
+            descriptions = annotation_desc_extended['Description'].tolist()
+            abbreviations = annotation_desc_extended['Abbreviation'].tolist()
+            abbrev_set = set(abbreviations)
+            for token in raw_annotation_columns.split(','):
+                token = token.strip()
+                if not token:
+                    continue
+                if token in abbrev_set:
+                    init_selected_cols.append(token)
+                else:
+                    match = get_abbr_of(token, descriptions, abbreviations)
+                    init_selected_cols.append(match if match else token)
+        else:
+            # Default: the first 10 abbreviations (matching the annotation
+            # table's own default selection).
+            first_10 = annotation_desc_extended.head(10)
+            if 'Abbreviation' in first_10.columns:
+                init_selected_cols = first_10['Abbreviation'].dropna().tolist()
+
     # PCA tab (always present): the plots, or the eigenvec loader if no data yet.
     tab_configs.append({
         'label': 'PCA',
@@ -163,6 +209,17 @@ def create_layout(args, df, pcs,
             init_group_symbol=init_group_symbol,
             map_initially_visible=map_initially_visible,
             time_initially_visible=time_initially_visible,
+            legend_mode=getattr(args, 'legend', 'Once'),
+            time_invert_columns=time_invert_columns,
+            time_rotate_columns=time_rotate_columns,
+            init_pc_x=init_pc_x,
+            init_pc_y=init_pc_y,
+            init_pc_z=init_pc_z,
+            init_time_viz_mode=init_time_viz_mode,
+            init_time_bin_size=init_time_bin_size,
+            init_3d=getattr(args, 'pca_3d', False),
+            init_time_group_mode=getattr(args, 'time_group_mode', 'group'),
+            init_map_type=getattr(args, 'map_type', 'map'),
         ) if df is not None else eigenvec_loader_panel(args)
     })
 
@@ -170,7 +227,8 @@ def create_layout(args, df, pcs,
     tab_configs.append({
         'label': 'Annotation',
         'value': 'annotation_tab',
-        'content': create_annotation_tab(annotation_desc, annotation_columns, pcs)
+        'content': create_annotation_tab(annotation_desc, annotation_columns, pcs,
+                                         init_selected_cols=init_selected_cols)
                    if annotation_desc is not None
                    else annotation_loader_panel(
                        args, show_embedded_option=(has_embedded_annotation_cols or df is None),
@@ -178,31 +236,43 @@ def create_layout(args, df, pcs,
                    )
     })
 
-    # Settings tab (always present): the other CLI options.
-    tab_configs.append({
-        'label': 'Settings',
-        'value': 'settings_tab',
-        'content': settings_panel(args)
-    })
-
-    # Settings 2 tab (always present): experimental per-panel reorganization
-    # of the plotting parameters (see create_settings2_tab/callbacks/settings2.py).
     # The map/time panels exist (show_map_plot/show_time_plot) whenever
     # annotation data is loaded at all — matching app.py/callbacks/__init__.py
     # — regardless of whether --latitude/--longitude/--time were given;
     # map_initially_visible/time_initially_visible (whether they were) only
     # decide the panel's/checkbox's starting state, not whether it exists.
+    # Needed here (not just in create_pca_tab) for the Settings tab's own
+    # panel show/hide checkboxes and Equivalent command section.
     show_map_plot = df is not None and annotation_desc is not None
     show_time_plot = df is not None and annotation_desc is not None
+
+    # Raw eigenvec column names, for the Settings tab's eigenvecID dropdown
+    # (layouts/setup.py:settings_panel) — the ID column itself gets renamed
+    # to 'id' once loaded (data_loader.load_eigenvec), so its original name
+    # isn't recoverable from df/pcs; a header-only reread is cheap and keeps
+    # that dropdown showing the file's actual columns, like the eigenvec
+    # loader's own picker does right after Read.
+    eigenvec_columns = []
+    if args.eigenvec and os.path.isfile(args.eigenvec):
+        try:
+            from ..data_loader import detect_eigenvec_sep
+            eigenvec_columns = list(
+                pd.read_csv(args.eigenvec, sep=detect_eigenvec_sep(args.eigenvec), nrows=0).columns
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Could not read eigenvec columns for Settings: %s", exc)
+
+    # Settings tab (always present): the other CLI options.
     tab_configs.append({
-        'label': 'Settings 2',
-        'value': 'settings2_tab',
-        'content': create_settings2_tab(
-            df, pcs, continuous_columns, ANNOTATION_LAT, ANNOTATION_LONG, ANNOTATION_TIME,
-            show_map_plot=show_map_plot, show_time_plot=show_time_plot,
+        'label': 'Settings',
+        'value': 'settings_tab',
+        'content': settings_panel(
+            args, show_map_plot=show_map_plot, show_time_plot=show_time_plot,
             show_annotation_table=annotation_desc is not None,
             map_initially_visible=map_initially_visible,
             time_initially_visible=time_initially_visible,
+            eigenvec_columns=eigenvec_columns,
+            annotation_desc=annotation_desc,
         )
     })
 
@@ -210,91 +280,307 @@ def create_layout(args, df, pcs,
     from ..args import create_parser
     parser = create_parser()
     
-    help_content = html.Div([
-        # User guide section
-        html.Div([
-            html.H3('Interactive PCA Visualization - User Guide', style={'marginBottom': '20px'}),
+    # Same header style as the Annotation tab's "Annotation Description" title
+    # (layouts/__init__.py:create_annotation_tab) — kept identical here for
+    # a consistent look across the app's section titles.
+    _title_style = {'marginBottom': '20px'}
 
-            html.H4('Overview', style={'marginTop': '20px'}),
+    user_guide_panel = dbc.Card([
+        dbc.CardBody([
             html.P([
-                'This application provides interactive visualization of Principal Component Analysis (PCA) results ',
-                'with support for geographical mapping, temporal data, and rich annotations.'
+                'interactivePCA is a Dash web app for interactively exploring PCA/MDS results from '
+                'population-genetics data. It links four views — a 2D/3D PCA scatter plot, a geographic map, '
+                'a time plot, and an annotation table — so selection, hover highlighting, and point styling '
+                'stay synchronized across all of them.'
             ]),
 
-            html.H4('Key Features', style={'marginTop': '20px'}),
-            html.Ul([
-                html.Li([html.Strong('PCA Plot: '), 'Visualize samples in PC space with 2D or 3D views. Select PC axes, group samples by variables, and use lasso/box selection.']),
-                html.Li([html.Strong('Geographical Map: '), 'View sample locations on an interactive map (requires latitude/longitude data).']),
-                html.Li([html.Strong('Time Plot: '), 'Explore temporal distributions with scatter, histogram, or overlay views.']),
-                html.Li([html.Strong('Annotation Table: '), 'Browse and filter sample metadata. Select visible columns to customize hover information.']),
-            ]),
+            html.H3('Main features: the four panels', style=_title_style),
 
-            html.H4('Interactive Plots', style={'marginTop': '20px'}),
-            html.Ul([
-                html.Li([html.Strong('Group by: '), 'Color and group samples by any categorical or continuous variable.']),
-                html.Li([html.Strong('Hover detailed: '), 'Toggle between minimal hover info (ID + group) and detailed info (all selected annotation columns).']),
-                html.Li([html.Strong('Lasso selection: '), 'Select samples across all plots simultaneously.']),
-                html.Li([html.Strong('3D toggle: '), 'Switch between 2D and 3D PCA views.']),
-                html.Li([html.Strong('Legend toggle: '), 'Show/hide legends.']),
-            ]),
-
-            html.H4('Interactive Table', style={'marginTop': '20px'}),
-            html.Ul([
-                html.Li([html.Strong('Select columns to display: '), 'Under the tab "Annotation" you can select the columns to be shown in the Annotation table.']),
-                html.Li([html.Strong('Sample selection: '), 'Select samples in the Annotation table']),
-                html.Li([html.Strong('filter query: '), 'Use pandas query() to filter samples below the Annotation table.']),
-            ]),
-
-            html.H4('Hover Information', style={'marginTop': '20px'}),
+            html.H3('PCA plot', style=_title_style),
             html.P([
-                'Hover over any point to see sample information. Use the "Hover detailed" checkbox in the PCA tab to toggle between:',
+                'Pick any two (or three, in 3D) continuous columns for the X/Y/Z axes from the dropdowns above '
+                'the plot. ', html.Strong('3D'), ' toggles a rotatable ', html.Code('Scatter3d'), ' view. The '
+                'PCA plot isn\u2019t limited to PCs \u2014 it can visualize any 2D or 3D scatter of continuous columns.'
             ]),
-            html.Ul([
-                html.Li([html.Strong('Minimal: '), 'Shows sample ID and group (colored by group).']),
-                html.Li([html.Strong('Detailed: '), 'Shows ID, group, and all columns selected in the Annotation table.']),
+
+            html.H3('Geographic map', style=_title_style),
+            html.P([
+                'Shown once latitude/longitude columns are resolved (via ', html.Code('--latitude'), '/',
+                html.Code('--longitude'), ', or picked live from the ', html.Strong('X:'), '/', html.Strong('Y:'),
+                ' dropdowns). ', html.Strong('Basemap'), ' switches between ', html.Code('map'),
+                ' (world outline), ', html.Code('tiles'), ' (interactive street/satellite imagery), and ',
+                html.Code('none'), ' (points only). Despite the name, this panel isn\u2019t limited to showing a '
+                'geographic map \u2014 the same X:/Y: dropdowns can plot any two continuous columns as an '
+                'ordinary 2D scatter.'
+            ]),
+
+            html.H3('Time plot', style=_title_style),
+            html.P([
+                'Plots any continuous column (not only the ', html.Code('--time'), ' column); the other axis is '
+                'either a jitter of the samples or the column\u2019s distribution, depending on the view. ',
+                html.Strong('View'), ' switches between Scatter, Violin, Distribution and Overlay. In Scatter '
+                'and Violin, ', html.Strong('Grouping'), ' controls whether samples are split by group, when ',
+                html.Strong('Color by'), ' is a categorical column. ', html.Strong('Bin size'), ' sets the '
+                'histogram bin width (Distribution/Overlay only). Overlay adds the selected samples\u2019 own '
+                'distribution on top of the full one, where Distribution only ever shows the full histogram. ',
+                html.Strong('Invert'), ' flips the axis direction (useful for e.g. a BP date column), ',
+                html.Strong('Rotate'), ' swaps X/Y, and ', html.Strong('Time slice'), ' adds a draggable window '
+                'that selects only the samples falling inside it \u2014 drag it, or use the arrows beside it, to '
+                'scroll through time and watch the selected samples change live in the PCA and map panels.'
+            ]),
+
+            html.H3('Annotation table', style=_title_style),
+            html.P([
+                'Lists every sample with the metadata columns. To improve readability, the columns shown can be '
+                'chosen in the ', html.Strong('Annotation'), ' tab (or via ', html.Code('--annotation-columns'),
+                '). The same selected columns are also shown when hovering over a sample. Detailed hover is the '
+                'default and can be suppressed via the ', html.Strong('Hover detailed'), ' toggle in the '
+                'Settings tab, or at launch with ', html.Code('--hover-minimal'), '. This panel also has two '
+                'other sub-tabs: ', html.Strong('Details'), ', which shows the full hover information for the '
+                'currently hovered sample, and ', html.Strong('Filter'), ', which doesn\u2019t hide any rows in '
+                'the table \u2014 instead it sets the selection to the samples matching a pandas ',
+                html.Code('query()'), ' expression (e.g. ', html.Code('Age > 1000 & Country == "Peru"'),
+                '), exactly like any other selection method; the table\u2019s Status column, and every other '
+                'panel, then reflects that selection.'
+            ]),
+
+            html.H3('Cross-panel synchronization', style=_title_style),
+            html.P([
+                'The group coloring and shape set by ', html.Strong('Color by'), ' and ', html.Strong('Shape by'),
+                ' apply simultaneously to all plots.'
             ]),
             html.P([
-                'The columns displayed in detailed mode match your selection in the Annotation table. ',
-                'Select/deselect rows to customize which metadata appears in hover tooltips.'
+                'Hovering any sample \u2014 in the PCA plot, the map, the time plot, or an annotation table row '
+                '\u2014 highlights that same sample in the other panels, with a minimal \u201cID\u201d tooltip '
+                'regardless of the ', html.Strong('Hover detailed'), ' setting.'
             ]),
-
-            html.H4('Aesthetics', style={'marginTop': '20px'}),
             html.P([
-                'Click "Aesthetics" in the PCA tab to customize colors, sizes, shapes, and opacity for each group value. ',
-                'For continuous variables, choose a color scale. For categorical variables, edit individual group aesthetics.'
+                'The legend for color and shape is shown only once by default. This can be adjusted via ',
+                html.Strong('Legend mode'), ' (Settings tab, or the live dropdown): ', html.Code('none'),
+                ' hides it everywhere, ', html.Code('once'), ' shows it on a single active plot at a time, ',
+                html.Code('everywhere'), ' shows it on every panel that has one, simultaneously.'
             ]),
 
-            html.H4('Tips', style={'marginTop': '20px'}),
+            html.H3('Grouping / coloring and aesthetics', style=_title_style),
+            html.P([
+                html.Strong('Color by'), ' groups/colors by any continuous or categorical column, including the '
+                'PCs. ', html.Strong('Shape by'), ' groups any categorical column by shape. The aesthetics of '
+                'every grouping and coloring can be individually adapted, as well as the aesthetics of the '
+                'unselected points. Click ', html.Strong('Aesthetics'), ' to open the editor for the current '
+                'Color-by/Shape-by column:'
+            ]),
             html.Ul([
-                html.Li('Use lasso or box selection to highlight samples across all plots simultaneously.'),
-                html.Li('The annotation table updates to show only selected samples.'),
-                html.Li('Export selections by filtering the annotation table and copying data.'),
-                html.Li('Customize hover information by selecting specific annotation columns in the table.'),
-                html.Li('Save aesthetic configurations to a JSON file for reuse with --aesthetics-file.'),
+                html.Li([html.Strong('Categorical group: '), 'a table with one row per category \u2014 edit '
+                         'color, size, opacity and symbol per value, and drag rows to set the draw order '
+                         '(row 1 draws last, i.e. on top).']),
+                html.Li([html.Strong('Continuous group: '), 'pick a color scale (Viridis, Plasma, ...) instead '
+                         'of per-value colors.']),
+                html.Li([html.Strong('Shape-by'), ' (a second, independent grouping): assigned its own marker '
+                         'symbols, shown as a second legend block.']),
+            ]),
+            html.P([
+                'Changes apply immediately to all three plots. Save a configuration to a JSON file for reuse '
+                'with ', html.Code('--aesthetics-file'), ', or set simple global defaults once via ',
+                html.Code('--point-color'), ', ', html.Code('--point-size'), ', ', html.Code('--point-opacity'),
+                ', ', html.Code('--point-symbol'), ' (and their ', html.Code('-unselected'),
+                ' counterparts) at launch.'
             ]),
 
-        ], style={
-            'backgroundColor': 'white',
-            'padding': '20px',
-            'marginBottom': '20px',
-            'borderRadius': '5px',
-            'border': '1px solid #dee2e6'
-        }),
-        
-        # Command-line parameters section
-        html.H3('Command-line Parameters', style={'marginBottom': '10px'}),
-        html.Pre(
-            strip_ansi(parser.format_help()),
-            style={
-                'backgroundColor': '#f8f9fa',
-                'padding': '10px',
-                'fontFamily': 'monospace',
-                'fontSize': '14px',
-                'whiteSpace': 'pre-wrap'
-            }
-        )
-    ], style={'height': '100%', 'overflow': 'auto', 'padding': '20px'})
-    
+            html.H3('Selection', style=_title_style),
+            html.P([
+                'Sample selection can be made on any plot or the table, and the selected samples are '
+                'immediately synchronized to the other plots and table. Selecting groups or samples can be '
+                'done in several ways:'
+            ]),
+            html.Ul([
+                html.Li([html.Strong('Legend: '), 'use Plotly\u2019s built-in legend \u2014 click (or '
+                         'double-click) a legend entry to hide/show that group everywhere.']),
+                html.Li([html.Strong('Lasso'), ' or ', html.Strong('box-select'), ' allows selecting multiple '
+                         'samples in any of the figures.']),
+                html.Li([html.Strong('Row selection'), ' in the table allows selecting one or multiple '
+                         'samples.']),
+                html.Li([html.Strong('Filter'), ' allows selecting samples using a pandas ', html.Code('query()'),
+                         ' expression (e.g. ', html.Code('Age > 1000 & Country == "Peru"'), ').']),
+                html.Li([html.Strong('Time slice'), ' in the time plot allows selecting samples within a given '
+                         'time window, and dragging that window left/right to scroll through time.']),
+            ]),
+            html.P([
+                'The ', html.Strong('Selection'), ' frame shows the number of selected samples and lets you ',
+                html.Strong('Freeze'), ' the selection (so no other control \u2014 lasso, filter, time-slice, '
+                'Reset \u2014 can change it until unfrozen) or ', html.Strong('Save selection'), ' as a '
+                'plain-text file of sample IDs, for use outside the app. It also reports which method last '
+                'produced the current selection, since each new selection \u2014 lasso, filter, row click, '
+                'time-slice, etc. \u2014 replaces the previous one rather than combining with it.'
+            ]),
+
+            html.H3('Session', style=_title_style),
+            html.P([
+                'An ongoing session can be stored and picked up later. There are three different ways to do '
+                'this, each keeping a different amount of state:'
+            ]),
+            html.Ul([
+                html.Li([html.Strong('Save view: '), 'downloads a ', html.Code('session.json'), ' holding the '
+                         'full launch configuration plus the current view \u2014 selection, aesthetics, axes, '
+                         'pane sizes and zoom. Reload it with ', html.Code('--session file.json'), ' or the '
+                         'setup wizard\u2019s \u201cOr load a saved session\u201d option to continue on the '
+                         'exact same view next time.']),
+                html.Li([html.Strong('Export Snapshot: '), 'downloads a self-contained ',
+                         html.Code('interactivePCA_<timestamp>.html'), ' file \u2014 the current PCA, map and '
+                         'time figures plus the annotation table and selection, built directly from what\u2019s '
+                         'on screen, no server round-trip. It needs no running Dash server to open: hover sync, '
+                         'legend-click sync, cross-plot lasso/box-select syncing, and a sortable/filterable '
+                         'table all work standalone, ported to plain JavaScript (Plotly.js and AG Grid are '
+                         'pulled from a CDN). Not included: the live aesthetics editor and the pandas filter '
+                         'query, both unsafe/impractical to reproduce without a server \u2014 colors are frozen '
+                         'as they appeared at export time, and AG Grid\u2019s own column sort/filter covers '
+                         'narrowing rows instead. Handy for sharing a point-in-time view with colleagues who '
+                         'don\u2019t run the app themselves.']),
+                html.Li([html.Strong('Generate command: '), 'produces the ', html.Code('interactivePCA ...'),
+                         ' command line for the current setup; the full variant lists every parameter, not '
+                         'just non-defaults. It covers the data configuration \u2014 files, columns, axes, '
+                         'grouping \u2014 but not aesthetics or zoom, so it suits sharing a setup with '
+                         'colleagues or scripting a launch.']),
+                html.Li([html.Strong('Restart'), ' (top-right of the header) returns to the setup wizard '
+                         'without losing non-data settings like the server port.']),
+            ]),
+
+            html.H3('Launching interactivePCA', style=_title_style),
+            html.P([
+                'interactivePCA can be launched several different ways, depending on how much you specify up '
+                'front \u2014 from nothing at all (a point-and-click setup wizard) to a fully explicit command '
+                'line:'
+            ]),
+            html.Ul([
+                html.Li([html.Strong('No arguments'), ' (', html.Code('interactivePCA'), '): opens a setup '
+                         'wizard instead of the plots. The PCA tab lets you type or browse to an eigenvec file '
+                         'and ', html.Strong('Read'), ' its columns, the Annotation tab does the same for an '
+                         'annotation file, and ', html.Strong('Settings'), ' holds every other option; each '
+                         'tab\u2019s ', html.Strong('Load'), '/', html.Strong('Apply'), ' button relaunches the '
+                         'app with those settings composed into the command line, so the result is identical '
+                         'to typing that full command yourself.']),
+                html.Li([html.Strong([html.Code('--eigenvec'), ' only']), ': starts with the PCA plot already '
+                         'showing; the Annotation tab still offers its loader, unless the eigenvec file itself '
+                         'has extra columns (see below).']),
+                html.Li([html.Strong('Annotation embedded in the eigenvec file'), ': if ', html.Code('--annotation'),
+                         ' is omitted but the eigenvec file has extra, non-coordinate columns, the Annotation '
+                         'tab offers \u201cUse annotations from eigenvec file\u201d to use them directly instead '
+                         'of reading a separate file.']),
+                html.Li([html.Strong('Fully specified'), ', e.g. ',
+                         html.Code('--eigenvec samples.eigenvec --annotation samples.anno --latitude Lat. '
+                                   '--longitude Long. --time Date'),
+                         ': every panel resolves immediately, no wizard step needed \u2014 see the walkthrough '
+                         'below.']),
+                html.Li([html.Strong(html.Code('--session file.json')), ': resumes a previously saved session '
+                         '(see ', html.Strong('Save view'), ' above) exactly where it left off, including '
+                         'selection, aesthetics, axes, pane sizes and zoom.']),
+                html.Li([html.Strong('Single PCA plot'), ': if no annotation is passed, or the columns for the '
+                         'geographic map (', html.Code('--latitude'), '/', html.Code('--longitude'), ') or the '
+                         'time plot (', html.Code('--time'), ') aren\u2019t defined, only the PCA plot is shown. '
+                         'To add the geographic map or time plot during a session, enable it in the Settings '
+                         'tab and then pick which columns to show.']),
+                html.Li(['Useful regardless of the above: ', html.Code('--dev'), ' enables debug mode and '
+                         'verbose logging, ', html.Code('--open-browser'), ' opens the app in a browser '
+                         'automatically, and ', html.Code('--help'), ' lists every option.']),
+            ]),
+
+            html.H3('Quick-start walkthrough', style=_title_style),
+            html.P('A worked example for an ancient-DNA dataset with coordinates and dates:'),
+            html.Ol([
+                html.Li([
+                    html.P([html.Strong('Launch'), ' with everything resolved up front:']),
+                    html.Pre(
+                        'interactivePCA --eigenvec samples.eigenvec --annotation samples.anno \\\n'
+                        '  --latitude Lat. --longitude Long. --time Date',
+                        style={'backgroundColor': '#f8f9fa', 'padding': '8px', 'fontFamily': 'monospace',
+                               'fontSize': '13px', 'whiteSpace': 'pre-wrap'}
+                    ),
+                    html.P(['Or launch with just ', html.Code('--eigenvec'), ' and use the setup wizard\u2019s ',
+                            html.Strong('Read'), ' / ', html.Strong('Load'), ' buttons on the PCA and '
+                            'Annotation tabs instead.']),
+                ]),
+                html.Li([html.Strong('Explore structure: '), 'on the PCA tab, set ', html.Strong('Color by'),
+                         ' to a region/population column; open ', html.Strong('Aesthetics'), ' to assign '
+                         'clearer colors and reorder overlapping groups.']),
+                html.Li([html.Strong('Check geography: '), 'switch to the Map sub-panel; try the ',
+                         html.Code('tiles'), ' basemap for a familiar street/satellite view.']),
+                html.Li([html.Strong('Check chronology: '), 'on the Time plot, switch ', html.Strong('View'),
+                         ' to Distribution and adjust ', html.Strong('Bin size'), '; enable ',
+                         html.Strong('Time slice'), ' and drag the window to watch clusters appear/disappear '
+                         'through time \u2014 the PCA and map panels highlight the same samples live.']),
+                html.Li([html.Strong('Cross-check a sample: '), 'hover any sample in any panel \u2014 or click '
+                         'its row in the Annotation table \u2014 to see it highlighted everywhere else.']),
+                html.Li([html.Strong('Save your work: '), 'click ', html.Strong('Save view'), ' to download a ',
+                         html.Code('session.json'), ' capturing the exact state (including aesthetics and '
+                         'zoom), or use ', html.Strong('Generate command'), ' to copy a CLI command for '
+                         'colleagues who just need the data configuration.']),
+            ]),
+
+            html.H3('Tips, troubleshooting and command-line reference', style=_title_style),
+            html.Ul([
+                html.Li('Use lasso or box selection on any plot to highlight the same samples everywhere, '
+                        'including the annotation table.'),
+                html.Li('The annotation table\u2019s \u201cStatus\u201d column (selected/unselected/hidden) can '
+                        'also be edited directly to change selection or hide a row\u2019s group from the '
+                        'legend.'),
+                html.Li('Column names referencing annotation data can be given as either their original header '
+                        'or their abbreviated working name \u2014 both resolve to the same column.'),
+                html.Li(['A command rejected with \u201cinvalid choice\u201d for an aesthetics parameter '
+                         '(point size/opacity/symbol, color scale) means the value isn\u2019t one of the '
+                         'app\u2019s preset options; check ', html.Code('--help'), ' for the exact list.']),
+                html.Li('If a relaunch (Refresh/Restart/Load) doesn\u2019t return, check the terminal/log \u2014 '
+                        'it most likely crashed on a data-loading error and needs a fix before trying again.'),
+            ]),
+            html.P('For the complete, always-current list of parameters, run:'),
+            html.Pre(
+                'interactivePCA --help',
+                style={'backgroundColor': '#f8f9fa', 'padding': '8px', 'fontFamily': 'monospace',
+                       'fontSize': '13px', 'whiteSpace': 'pre-wrap'}
+            ),
+        ]),
+    ], className='mb-3')
+
+    params_panel = dbc.Card([
+        dbc.CardBody([
+            html.Pre(
+                strip_ansi(parser.format_help()),
+                style={
+                    'backgroundColor': '#f8f9fa',
+                    'padding': '10px',
+                    'fontFamily': 'monospace',
+                    'fontSize': '14px',
+                    'whiteSpace': 'pre-wrap'
+                }
+            )
+        ]),
+    ], className='mb-3')
+
+    # Same bounded-height + overflowY:'auto' pattern as the Settings tab
+    # (layouts/setup.py:settings_panel) — each panel scrolls independently
+    # within its own column, rather than the whole tab growing to fit
+    # whichever panel (the parameter list, usually) is taller. The title sits
+    # outside that scrolling area (a sibling above it, not inside the Card),
+    # so it stays pinned in view while the panel's own content scrolls.
+    _help_panel_col_style = {'flex': '1 1 0', 'minWidth': '0', 'display': 'flex', 'flexDirection': 'column'}
+    _help_scroll_style = {'maxHeight': 'calc(100vh - 160px)', 'overflowY': 'auto'}
+    # These titles sit outside the Card (see above), which otherwise left-aligns
+    # them with the Card's own edge instead of the CardBody text inside it —
+    # offset by Bootstrap's default card-body padding (--bs-card-spacer-x) to
+    # line them up with that text.
+    _help_title_style = {**_title_style, 'paddingLeft': '1.25rem'}
+    help_content = html.Div(
+        [
+            html.Div([
+                html.H3('User guide', style=_help_title_style),
+                html.Div(user_guide_panel, style=_help_scroll_style),
+            ], style=_help_panel_col_style),
+            html.Div([
+                html.H3('Command-line parameters', style=_help_title_style),
+                html.Div(params_panel, style=_help_scroll_style),
+            ], style=_help_panel_col_style),
+        ],
+        style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '16px', 'padding': '20px'},
+    )
+
     tab_configs.append({
         'label': 'Help',
         'value': 'help_tab',
@@ -319,25 +605,9 @@ def create_layout(args, df, pcs,
             base_aesthetics = get_init_aesthetics(args, group_name, df)
             init_store_data[group_name] = merge_aesthetics(base_aesthetics, all_file_aesthetics[group_name])
     
-    # Calculate initial selected annotation columns (first 10 rows, same as annotation table default)
-    init_selected_cols = []
-    if annotation_desc is not None:
-        annotation_desc_extended = annotation_desc.copy()
-        if pcs:
-            pc_rows = pd.DataFrame({
-                'Abbreviation': pcs,
-                'Description': pcs,
-                'Type': ['continuous'] * len(pcs),
-                'N_levels': [None] * len(pcs),
-                'Dropdown': ['Yes'] * len(pcs)
-            })
-            annotation_desc_extended = pd.concat([annotation_desc, pc_rows], ignore_index=True)
-        
-        # Get the first 10 abbreviations (matching the annotation table default selection)
-        first_10 = annotation_desc_extended.head(10)
-        if 'Abbreviation' in first_10.columns:
-            init_selected_cols = first_10['Abbreviation'].dropna().tolist()
-    
+    # init_selected_cols is already computed above (--annotation-columns or
+    # the first-10 default), shared with the Annotation tab's own table.
+
     # Main layout
     layout = html.Div([
         # Data stores
@@ -345,7 +615,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='selected-source', data='initial'),
         dcc.Store(id='marker-aesthetics-store', data=init_store_data),
         dcc.Store(id='selection-store', data=init_selected_ids),  # Selected IDs for cross-plot sync
-        dcc.Store(id='hover-detailed', data=False),  # Toggle for detailed hover information
+        dcc.Store(id='hover-detailed', data=not getattr(args, 'hover_minimal', False)),  # Toggle for detailed hover information (detailed by default; seeded from --hover-minimal, see hover-detailed-toggle in Settings)
         dcc.Store(id='selected-annotation-columns', data=init_selected_cols),  # Selected columns from annotation table
         dcc.Store(id='hover-sync-dummy', data=None),  # Dummy output for hover-sync clientside callback
         dcc.Store(id='hidden-groups-store', data={}),  # Group values hidden via legend click
@@ -355,6 +625,7 @@ def create_layout(args, df, pcs,
         dcc.Store(id='effective-hover-detailed', data=False),  # hover-detailed overridden to False when Details tab active
         dcc.Store(id='map-view-store', data=None),  # Current map view bbox, preserved across basemap toggle
         dcc.Store(id='time-window-store', data={'enabled': False, 'lo': None, 'hi': None}),  # Time-slice window bounds, for the shaded band on the time plot
+        dcc.Store(id='legend-target-store', data='pca'),  # Which plot ('pca'/'time'/'map') currently hosts the group-colour legend
         dcc.Store(id='selection-frozen', data=False),  # While True, every selection-store writer becomes a no-op
         dcc.Store(id='session-init-store', data=init_session),  # Saved --session view, applied once on load
         dcc.Store(id='session-restore-dummy', data=None),  # Dummy output for the session-restore clientside callback
@@ -423,6 +694,11 @@ def create_layout(args, df, pcs,
                 style={'float': 'right', 'marginRight': '20px', 'marginTop': '14px',
                       'fontSize': '14px'},
             ),
+            # Relaunching takes a couple of seconds (new process + the
+            # poller waiting for it to come back up, see relaunch.py) with no
+            # other visual change in the meantime — this is the only sign
+            # anything happened until the page reloads itself.
+            html.Div(id='restart-status', style={'float': 'right', 'marginRight': '8px', 'marginTop': '14px'}),
             html.Button(
                 'Export snapshot',
                 id='export-snapshot-btn',
@@ -493,8 +769,7 @@ def create_layout(args, df, pcs,
 def _pca_axis_columns(pcs, continuous_columns):
     """Columns offered on the PCA plot's X/Y/Z axes: the PCA dimensions first
     (the common case and the defaults), then any other continuous column not
-    already among them — shared between create_pca_tab and create_settings2_tab
-    so the two stay in sync.
+    already among them.
     """
     return list(pcs) + [c for c in (continuous_columns or []) if c not in pcs]
 
@@ -510,22 +785,35 @@ def _dropdown_width(labels, min_px=90, char_px=7.2, padding_px=50):
 def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTATION_LAT,
                    df, aesthetics, ANNOTATION_LONG=None, annotation_columns=None, continuous_columns=None, annotation_desc=None, init_selected_ids=None,
                    dropdown_group_symbol_list=None, init_group_symbol='none',
-                   map_initially_visible=False, time_initially_visible=False):
+                   map_initially_visible=False, time_initially_visible=False, legend_mode='Once',
+                   time_invert_columns=frozenset(), init_pc_x=None, init_pc_y=None,
+                   init_time_viz_mode='scatter', init_time_bin_size=None,
+                   time_rotate_columns=frozenset(), init_pc_z=None,
+                   init_3d=False, init_time_group_mode='group', init_map_type='map'):
     """Create PCA tab layout with map on the right and extra panels below."""
-    # Determine if legend should be shown initially (only if group has multiple unique values)
-    init_show_legend = []
+    # Determine if legend should be shown initially (only if group has multiple
+    # unique values and --legend doesn't start out suppressing it entirely —
+    # see settings2-legend-mode in the Settings tab for the live control).
     init_legend = False
-    if init_group != 'none' and init_group in df.columns:
+    if legend_mode != 'None' and init_group != 'none' and init_group in df.columns:
         n_unique = df[init_group].nunique()
         if n_unique > 1:
-            init_show_legend = ['show_legend']
             init_legend = True
-    
+
+    # --pc-x/--pc-y/--pc-z (any axis column, not just a PC — see
+    # _pca_axis_columns) seed the PCA plot's initial X/Y/Z, falling back to
+    # the first three PCs when unset or invalid, same convention as
+    # dropdown-pc-x/-y/-z further below.
+    axis_columns = _pca_axis_columns(pcs, continuous_columns)
+    pc_x_value = init_pc_x if init_pc_x in axis_columns else pcs[0]
+    pc_y_value = init_pc_y if init_pc_y in axis_columns else pcs[1]
+    pc_z_value = init_pc_z if init_pc_z in axis_columns else (pcs[2] if len(pcs) > 2 else pcs[0])
+
     # Generate initial PCA figure
     aesthetics_tuple = dict_of_dicts_to_tuple(aesthetics)
     init_fig = generate_fig_scatter2d(
-        x_col=pcs[0],
-        y_col=pcs[1],
+        x_col=pc_x_value,
+        y_col=pc_y_value,
         group=init_group,
         aesthetics_tuple=aesthetics_tuple,
         legend=init_legend
@@ -609,65 +897,54 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     
     # Control section (grouping + selection actions — axis controls live above the PCA plot)
     control_section = html.Div([
-        # Left side controls
+        # Left side controls — same bordered "notch" box pattern as the
+        # Selection box on the right (see its own comment below for why a
+        # plain Div + absolutely-positioned title is used instead of
+        # html.Fieldset/Legend).
         html.Div([
+            html.Span('Grouping / coloring', style={
+                'position': 'absolute', 'top': '-9px', 'left': '10px',
+                'backgroundColor': '#f8f9fa', 'padding': '0 6px',
+                'fontSize': '12px', 'fontWeight': 'bold', 'color': '#555',
+            }),
             html.Div([
-                html.Label('Color by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-group',
-                    options=[{'label': g, 'value': g} for g in dropdown_group_list],
-                    value=init_group,
-                    clearable=False,
-                    style={'width': '200px'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '8px'}),
-            html.Div([
-                html.Label('Shape by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-group-symbol',
-                    options=[{'label': g, 'value': g} for g in (dropdown_group_symbol_list or dropdown_group_list)],
-                    value=init_group_symbol,
-                    clearable=False,
-                    style={'width': '200px'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
-            # Show Legend + Hover detailed stacked in one narrow column with
-            # little space between them (Show Legend's own visibility is
-            # still independently toggled by update_legend_visibility).
-            html.Div([
-                html.Div(
-                    dcc.Checklist(
-                        id='pca-legend-toggle',
-                        options=[{'label': ' Show Legend', 'value': 'show_legend'}],
-                        value=init_show_legend,
-                        style={'marginRight': '0px'},
-                        labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
+                html.Div([
+                    html.Label('Color by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                    dcc.Dropdown(
+                        id='dropdown-group',
+                        options=[{'label': g, 'value': g} for g in dropdown_group_list],
+                        value=init_group,
+                        clearable=False,
+                        style={'width': '200px'}
                     ),
-                    id='legend-toggle-container',
-                    style={'display': 'none' if not init_show_legend else 'flex', 'alignItems': 'center'},
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '8px'}),
+                html.Div([
+                    html.Label('Shape by:', style={'marginRight': '8px', 'fontWeight': 'bold'}),
+                    dcc.Dropdown(
+                        id='dropdown-group-symbol',
+                        options=[{'label': g, 'value': g} for g in (dropdown_group_symbol_list or dropdown_group_list)],
+                        value=init_group_symbol,
+                        clearable=False,
+                        style={'width': '200px'}
+                    ),
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '16px'}),
+                html.Button(
+                    'Aesthetics',
+                    id='open-aesthetics',
+                    style={
+                        'padding': '6px 12px',
+                        'border': '1px solid #ccc',
+                        'borderRadius': '4px',
+                        'backgroundColor': '#ffffff',
+                        'cursor': 'pointer'
+                    }
                 ),
-                dcc.Checklist(
-                    id='hover-detailed-toggle',
-                    options=[{'label': ' Hover detailed', 'value': 'hover_detailed'}],
-                    value=[],
-                    style={'marginRight': '0px'},
-                    labelStyle={'marginBottom': '0px', 'whiteSpace': 'nowrap'}
-                )
-            ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'flex-start',
-                     'justifyContent': 'center', 'gap': '2px', 'marginRight': '16px'}),
-            html.Button(
-                'Aesthetics',
-                id='open-aesthetics',
-                style={
-                    'padding': '6px 12px',
-                    'border': '1px solid #ccc',
-                    'borderRadius': '4px',
-                    'backgroundColor': '#ffffff',
-                    'cursor': 'pointer'
-                }
-            ),
-        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
-        
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+        ], style={
+            'position': 'relative', 'border': '1px solid #ccc', 'borderRadius': '4px',
+            'padding': '10px 12px 8px', 'margin': '0', 'marginTop': '8px'
+        }),
+
         # Right side controls
         # A plain bordered box with the title overlapping the top border,
         # rather than html.Fieldset/Legend — Bootstrap's own CSS overrides
@@ -760,7 +1037,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     _lbl_ml = {**_lbl, 'marginLeft': '12px'}
     # Axes are not restricted to the PCA dimensions: any continuous column can
     # go on X/Y/Z, so a PC can be plotted against age, latitude, coverage, etc.
-    axis_columns = _pca_axis_columns(pcs, continuous_columns)
+    # (axis_columns/pc_x_value/pc_y_value already computed above, for the
+    # initial figure.)
     _axis_options = [{'label': c, 'value': c} for c in axis_columns]
     _axis_style = {'width': _dropdown_width(axis_columns), 'fontSize': '13px'}
     pca_plot = html.Div([
@@ -769,7 +1047,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             dcc.Dropdown(
                 id='dropdown-pc-x',
                 options=_axis_options,
-                value=pcs[0],
+                value=pc_x_value,
                 clearable=False,
                 style=_axis_style
             ),
@@ -777,7 +1055,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             dcc.Dropdown(
                 id='dropdown-pc-y',
                 options=_axis_options,
-                value=pcs[1],
+                value=pc_y_value,
                 clearable=False,
                 style=_axis_style
             ),
@@ -786,7 +1064,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 dcc.Dropdown(
                     id='dropdown-pc-z',
                     options=_axis_options,
-                    value=pcs[2] if len(pcs) > 2 else pcs[0],
+                    value=pc_z_value,
                     clearable=False,
                     style=_axis_style
                 ),
@@ -794,7 +1072,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             dcc.Checklist(
                 id='pca-3d-toggle',
                 options=[{'label': ' 3D', 'value': 'enable_3d'}],
-                value=[],
+                value=['enable_3d'] if init_3d else [],
                 style={'marginLeft': '12px'},
                 labelStyle={'whiteSpace': 'nowrap', 'fontSize': '13px'}
             ),
@@ -825,6 +1103,11 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # Time/continuous plot below PCA plot
     time_hist = html.Div()
     continuous_columns = continuous_columns or []
+    # Natural (no-CLI-override) default for the time-plot bin size — only set
+    # once a continuous column with actual values is found below; stays None
+    # otherwise (e.g. no annotation at all), which is itself the correct
+    # "nothing to default" answer for settings2-natural-defaults further down.
+    default_bin_size = None
     # Prefer the resolved --time column; otherwise fall back to the first
     # available continuous column so the panel has *something* to show even
     # before the user assigns a real time column via Settings 2.
@@ -877,9 +1160,10 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                 )
             )
             
-            time_is_reversed = default_continuous == ANNOTATION_TIME
+            time_is_reversed = default_continuous in time_invert_columns
             if time_is_reversed:
                 fig_time.update_xaxes(autorange='reversed')
+            time_is_rotated = default_continuous in time_rotate_columns
 
             # Time-slice slider: bounds/defaults from the initial time-variable's
             # range; callbacks/selection.py recomputes these when the user
@@ -946,46 +1230,60 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
 
             time_hist = html.Div([
                 html.Div([
-                    _time_ctrl_group([
-                        html.Label('Variable:', style={**_TF, 'marginRight': '8px', 'fontWeight': 'bold'}),
-                        dcc.Dropdown(
-                            id='time-variable',
-                            options=[{'label': col, 'value': col} for col in continuous_columns],
-                            value=default_continuous,
-                            clearable=False,
-                            style={**_TF, 'width': _dropdown_width(continuous_columns)}
-                        ),
-                    ]),
-                    # Invert + Time slice stacked in one narrow column instead
-                    # of side by side, to save horizontal space in this row.
-                    # marginBottom: '0' overrides dbc.Checkbox's own default
-                    # .form-check spacing (inline style always wins over its
-                    # Bootstrap class), so the two sit close together.
-                    _time_ctrl_group(
+                    html.Div(
                         [
-                            # dbc.Checkbox has no `title` prop of its own — wrap it.
-                            html.Div(
-                                dbc.Checkbox(
-                                    id='time-invert-toggle', value=time_is_reversed, label='Invert',
-                                    style={**_TF, 'whiteSpace': 'nowrap', 'marginBottom': '0'},
+                            _time_ctrl_group([
+                                html.Label('Variable:', style={**_TF, 'marginRight': '8px', 'fontWeight': 'bold'}),
+                                dcc.Dropdown(
+                                    id='time-variable',
+                                    options=[{'label': col, 'value': col} for col in continuous_columns],
+                                    value=default_continuous,
+                                    clearable=False,
+                                    style={**_TF, 'width': _dropdown_width(continuous_columns)}
                                 ),
-                                title='Reverse the axis direction. Set automatically for '
-                                      'the actual --time column; change freely for any variable.',
-                            ),
-                            dbc.Checkbox(
-                                id='time-window-enabled', value=False, label='Time slice',
-                                style={**_TF, 'whiteSpace': 'nowrap', 'marginBottom': '0'},
+                            ], marginRight='0'),
+                            # Invert + Rotate + Time slice side by side below
+                            # Variable. marginBottom: '0' overrides dbc.Checkbox's
+                            # own default .form-check spacing (inline style
+                            # always wins over its Bootstrap class), so they sit
+                            # close together.
+                            html.Div(
+                                [
+                                    # dbc.Checkbox has no `title` prop of its own — wrap it.
+                                    html.Div(
+                                        dbc.Checkbox(
+                                            id='time-invert-toggle', value=time_is_reversed, label='Invert',
+                                            style={**_TF, 'whiteSpace': 'nowrap', 'marginBottom': '0'},
+                                        ),
+                                        title='Reverse the axis direction. Set automatically for '
+                                              'the actual --time column; change freely for any variable.',
+                                    ),
+                                    html.Div(
+                                        dbc.Checkbox(
+                                            id='time-rotate-toggle', value=time_is_rotated, label='Rotate',
+                                            style={**_TF, 'whiteSpace': 'nowrap', 'marginBottom': '0'},
+                                        ),
+                                        title='Swap the x and y axes. Set automatically for columns '
+                                              'listed in --time-rotate-columns; change freely for any variable.',
+                                    ),
+                                    dbc.Checkbox(
+                                        id='time-window-enabled', value=False, label='Time slice',
+                                        style={**_TF, 'whiteSpace': 'nowrap', 'marginBottom': '0'},
+                                    ),
+                                ],
+                                style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'center', 'gap': '12px'},
                             ),
                         ],
-                        flexDirection='column', alignItems='flex-start', justifyContent='center', gap='2px',
+                        style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'flex-start',
+                              'gap': '4px', 'marginRight': '16px'},
                     ),
                     _time_ctrl_group([
                         html.Label('View:', style={**_TF, 'marginRight': '8px', 'fontWeight': 'bold'}),
                         dcc.Dropdown(
                             id='time-viz-mode',
                             options=[{'label': l, 'value': l.lower()} for l in _view_mode_labels],
-                            value='scatter',
-                            clearable=False,
+                            value=init_time_viz_mode,
+                            clearable=False, searchable=False,
                             style={**_TF, 'width': _dropdown_width(_view_mode_labels)}
                         ),
                     ]),
@@ -1000,8 +1298,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                                     {'label': 'Group', 'value': 'group'},
                                     {'label': 'Group with name', 'value': 'group_named'},
                                 ],
-                                value='group',
-                                clearable=False,
+                                value=init_time_group_mode,
+                                clearable=False, searchable=False,
                                 style={**_TF, 'width': _dropdown_width(_group_mode_labels)},
                             ),
                         ],
@@ -1015,7 +1313,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                         [
                             html.Label('Bin size:', style={**_TF, 'marginRight': '8px', 'whiteSpace': 'nowrap'}),
                             dbc.Input(
-                                id='time-bin-size', type='number', value=default_bin_size,
+                                id='time-bin-size', type='number',
+                                value=init_time_bin_size if init_time_bin_size is not None else default_bin_size,
                                 min=0, debounce=True,
                                 style={**_TF, 'width': '90px'}
                             ),
@@ -1098,28 +1397,52 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     # Map plot (top right) + Annotation table (bottom right)
     map_plot = html.Div()
     if show_map_plot:
-        map_type_toggle = html.Div(
-            [
-                html.Span('Basemap:', style={'fontSize': '12px', 'color': '#555',
-                                             'marginRight': '8px', 'fontWeight': 500}),
-                dcc.RadioItems(
-                    id='map-type-toggle',
-                    options=[
-                        {'label': 'Map', 'value': 'geo'},
-                        {'label': 'Tiles', 'value': 'tiles'},
-                    ],
-                    value='geo',
-                    inline=True,
-                    labelStyle={'marginRight': '12px', 'fontSize': '12px', 'cursor': 'pointer'},
-                    inputStyle={'marginRight': '4px'},
-                ),
-            ],
-            style={'display': 'flex', 'alignItems': 'center', 'padding': '2px 6px',
-                   'flex': '0 0 auto'},
-        )
+        # Lon/lat columns offered on the map's X/Y: same continuous columns the
+        # PCA plot's axes offer, minus the PC dimensions themselves (a PC isn't
+        # a coordinate) — prefilled from ANNOTATION_LONG/ANNOTATION_LAT, or
+        # empty if --latitude/--longitude never resolved (the map panel exists
+        # whenever annotation data is loaded at all, see show_map_plot above;
+        # these dropdowns are then how the user picks real coordinate columns
+        # live, no restart needed).
+        geo_axis_columns = [c for c in (continuous_columns or []) if c not in pcs]
+        _geo_axis_options = [{'label': c, 'value': c} for c in geo_axis_columns]
+        _geo_axis_style = {'width': _dropdown_width(geo_axis_columns), 'fontSize': '13px'}
+        _basemap_options = [{'label': c, 'value': c} for c in ('map', 'tiles', 'none')]
+        map_controls = html.Div([
+            html.Label('X:', style=_lbl),
+            dcc.Dropdown(
+                id='dropdown-map-x',
+                options=_geo_axis_options,
+                value=ANNOTATION_LONG,
+                clearable=False,
+                placeholder='(not set)',
+                style=_geo_axis_style
+            ),
+            html.Label('Y:', style=_lbl_ml),
+            dcc.Dropdown(
+                id='dropdown-map-y',
+                options=_geo_axis_options,
+                value=ANNOTATION_LAT,
+                clearable=False,
+                placeholder='(not set)',
+                style=_geo_axis_style
+            ),
+            html.Label('Basemap:', style=_lbl_ml),
+            dcc.Dropdown(
+                id='map-type-toggle',
+                options=_basemap_options,
+                value=init_map_type,
+                clearable=False, searchable=False,
+                style={'width': _dropdown_width([o['label'] for o in _basemap_options]), 'fontSize': '13px'}
+            ),
+        ], style={
+            'display': 'flex', 'alignItems': 'center', 'flex': '0 0 auto',
+            'padding': '6px 12px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px',
+            'marginBottom': '4px'
+        })
         map_plot = html.Div(
             [
-                map_type_toggle,
+                map_controls,
                 dcc.Graph(
                     id='pca-map-plot',
                     figure=init_map_fig,
@@ -1260,9 +1583,31 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
         else:
             map_section = make_tab_panel({'flex': '1 1 auto', 'height': '100%'})
     
+    # What each live-linked Settings field would be if nothing overrode it —
+    # read by the Equivalent-command generator (callbacks/settings2.py) so
+    # "Generate command" can tell "still at its natural default" (omit) apart
+    # from "user picked something else" (include), which comparing against
+    # the CLI's own argparse default (always None for these) cannot do.
+    natural_defaults = {
+        'pc_x': pcs[0],
+        'pc_y': pcs[1] if len(pcs) > 1 else pcs[0],
+        'pc_z': pcs[2] if len(pcs) > 2 else pcs[0],
+        'longitude': ANNOTATION_LONG,
+        'latitude': ANNOTATION_LAT,
+        'time': default_continuous,
+        'time_bin_size': default_bin_size,
+        # The *only* column time-invert-columns/time-rotate-columns default to
+        # (ignoring any CLI override) — see data_loader.resolve_column_set's
+        # own fallback_columns. Single column (or None), not a full set, since
+        # that's all the merge logic in callbacks/settings2.py needs.
+        'time_invert_columns_natural': ANNOTATION_TIME,
+        'time_rotate_columns_natural': None,
+    }
+
     # Aesthetics modal
     return html.Div([
         control_section,
+        dcc.Store(id='settings2-natural-defaults', data=natural_defaults),
         # A plain draggable panel instead of a centered/fixed Bootstrap modal —
         # drag by the title bar (see app.py's clientside drag-init callback,
         # triggered off this component's className). Visibility is toggled via
@@ -1433,120 +1778,7 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
 
 
-def _settings2_section(title, checkbox_id, checkbox_checked, body, available=True, unavailable_note=None):
-    """One bordered section of the Settings 2 tab: a Show-this-panel checkbox
-    plus whatever axis controls apply to that panel. When the panel does not
-    currently exist (its data was never loaded), the checkbox is disabled and
-    unavailable_note explains why, instead of hiding the whole section.
-    """
-    return dbc.Card([
-        dbc.CardHeader([
-            dbc.Checkbox(
-                id=checkbox_id, value=checkbox_checked, disabled=not available,
-                label=f"Show {title}", style={'marginBottom': 0},
-            ),
-        ]),
-        dbc.CardBody(
-            body if available else html.Small(unavailable_note, className='text-muted')
-        ),
-    ], className='mb-3')
-
-
-def create_settings2_tab(df, pcs, continuous_columns, ANNOTATION_LAT, ANNOTATION_LONG, ANNOTATION_TIME,
-                         show_map_plot, show_time_plot, show_annotation_table,
-                         map_initially_visible=False, time_initially_visible=False):
-    """Experimental reorganization of the plotting parameters: one section per
-    panel of the PCA tab (PCA plot, map, time plot, annotation table), each
-    with a Show checkbox and (for the figures) the axis column pickers.
-
-    These controls mirror the live ones already in the PCA tab rather than
-    replacing them — see callbacks/settings2.py for how the two stay in sync,
-    live, with no relaunch. The map/time panels exist as soon as annotation
-    data is loaded at all (show_map_plot/show_time_plot) — map_initially_visible/
-    time_initially_visible only decide whether their Show checkbox starts out
-    checked, i.e. whether --latitude/--longitude/--time happened to already
-    resolve. Only when there is no annotation data whatsoever (nothing to ever
-    pick a column from) does a section show a disabled checkbox and a note
-    instead of controls.
-    """
-    if df is None:
-        return html.Div(
-            "Load an eigenvec file (PCA tab) first.",
-            style={'padding': '20px', 'color': '#999'}
-        )
-
-    axis_columns = _pca_axis_columns(pcs, continuous_columns)
-    axis_opts = [{'label': c, 'value': c} for c in axis_columns]
-    _row_style = {'display': 'flex', 'alignItems': 'center', 'marginBottom': '8px'}
-    _lbl_style = {'width': '70px', 'fontWeight': 500, 'fontSize': '13px'}
-    _dd_style = {'flex': '1', 'maxWidth': '280px'}
-
-    def _axis_row(label, dd_id, value):
-        return html.Div([
-            html.Label(label, style=_lbl_style),
-            dcc.Dropdown(id=dd_id, options=axis_opts, value=value, clearable=False, style=_dd_style),
-        ], style=_row_style)
-
-    pca_body = html.Div([
-        _axis_row('X:', 'settings2-pc-x', pcs[0]),
-        _axis_row('Y:', 'settings2-pc-y', pcs[1]),
-        _axis_row('Z:', 'settings2-pc-z', pcs[2] if len(pcs) > 2 else pcs[0]),
-    ])
-
-    geo_columns = [c for c in continuous_columns if c not in pcs]
-    geo_opts = [{'label': c, 'value': c} for c in geo_columns]
-    map_body = html.Div([
-        html.Div([
-            html.Label('Lat:', style=_lbl_style),
-            dcc.Dropdown(id='settings2-map-lat', options=geo_opts, value=ANNOTATION_LAT,
-                        clearable=False, style=_dd_style),
-        ], style=_row_style),
-        html.Div([
-            html.Label('Lon:', style=_lbl_style),
-            dcc.Dropdown(id='settings2-map-lon', options=geo_opts, value=ANNOTATION_LONG,
-                        clearable=False, style=_dd_style),
-        ], style=_row_style),
-    ])
-
-    # Same fallback as create_pca_tab's time_hist: prefer the resolved --time
-    # column, otherwise the first continuous column, so this stays in sync
-    # with the live 'time-variable' dropdown's own initial value.
-    if ANNOTATION_TIME is not None and ANNOTATION_TIME in (df.columns if df is not None else []):
-        default_time = ANNOTATION_TIME
-    else:
-        default_time = continuous_columns[0] if continuous_columns else None
-    time_body = html.Div([
-        _axis_row('Time:', 'settings2-time-var', default_time),
-    ])
-
-    return html.Div([
-        html.H4('Plotting panels (experimental)', style={'marginBottom': '6px'}),
-        html.P(
-            "Show or hide each panel of the PCA tab and pick its axis columns. "
-            "These controls act immediately on the running app (no restart) and "
-            "stay in sync with the matching controls in the PCA tab itself.",
-            className='text-muted', style={'marginBottom': '16px'}
-        ),
-        _settings2_section('PCA plot', 'settings2-show-pca', True, pca_body),
-        _settings2_section(
-            'map', 'settings2-show-map', map_initially_visible, map_body,
-            available=show_map_plot,
-            unavailable_note='No annotation loaded — load one via the Annotation tab and restart.',
-        ),
-        _settings2_section(
-            'time plot', 'settings2-show-time', time_initially_visible, time_body,
-            available=show_time_plot,
-            unavailable_note='No annotation loaded — load one via the Annotation tab and restart.',
-        ),
-        _settings2_section(
-            'annotation table', 'settings2-show-table', True, html.Div(),
-            available=show_annotation_table,
-            unavailable_note='No annotation loaded — load one via the Annotation tab and restart.',
-        ),
-    ], style={'height': '100%', 'overflow': 'auto', 'padding': '20px', 'maxWidth': '480px'})
-
-
-def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
+def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None, init_selected_cols=None):
     """Create annotation tab layout."""
     # Extend annotation_desc with PC columns
     if pcs:
@@ -1566,9 +1798,15 @@ def create_annotation_tab(annotation_desc, annotation_columns=None, pcs=None):
     if 'Selected' not in annotation_desc_extended.columns:
         for row in table_data:
             row['Selected'] = False
-    for row in table_data[:10]:
-        row['Selected'] = True
-    
+    if init_selected_cols:
+        selected_set = set(init_selected_cols)
+        for row in table_data:
+            if row.get('Abbreviation') in selected_set:
+                row['Selected'] = True
+    else:
+        for row in table_data[:10]:
+            row['Selected'] = True
+
     # Define columns for the table (checkbox column instead of row selection)
     # Narrow columns use a fixed width + suppressSizeToFit so they never shrink
     # below their content; Description absorbs all remaining space via flex.

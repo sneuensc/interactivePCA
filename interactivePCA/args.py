@@ -7,6 +7,20 @@ import json
 import logging
 import os
 from .utils import is_notebook
+from .symbols import SHAPE_SYMBOLS
+
+# Preset choices for the aesthetics CLI flags below — the same values already
+# offered by the per-group Aesthetics editor's dropdown cell-editors
+# (callbacks/aesthetics.py), so picking a default in Settings (where these
+# render as dropdowns — see layouts/setup.py:_field_component) matches what
+# editing a single group there already offers. Each list includes that flag's
+# own default (0.9/0.3 aren't themselves "round" preset values) so the
+# default is always a valid, selectable option.
+_POINT_SIZES = [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
+_POINT_OPACITIES = [0.2, 0.3, 0.4, 0.6, 0.8, 0.9, 1.0]
+_CONTINUOUS_COLORSCALES = [
+    'Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Blues', 'Reds', 'Greens', 'YlOrRd', 'RdYlBu',
+]
 
 
 def float_0_1(value):
@@ -44,11 +58,20 @@ def create_parser(script_name='Script'):
     parser.add_argument('--eigenvec', type=str, default=None, required=False, metavar="FILE",
                        help='Data file path. Can contain: ID column (1st col, e.g. Sample), '
                             'dimension columns (e.g. PC1, PC2, PC3), and annotation columns (e.g. Region, Date).')
-    parser.add_argument('--eigenvecID', type=str, default=None, metavar="NAME",
+    parser.add_argument('--eigenvecID', type=str, default=None, metavar="COL",
                        help='ID column name (e.g. Sample, IID). Default is first column.')
     parser.add_argument('--dim', type=str, default=None, metavar="COLS",
                        help='Dimension column names, comma-separated (e.g. PC1,PC2,PC3). '
                             'If not provided, auto-detects columns with a prefix followed by increasing numbers.')
+    parser.add_argument('--pc-x', type=str, default=None, metavar="COL",
+                       help='Initial PCA plot X-axis column (default: the first dimension)')
+    parser.add_argument('--pc-y', type=str, default=None, metavar="COL",
+                       help='Initial PCA plot Y-axis column (default: the second dimension)')
+    parser.add_argument('--pc-z', type=str, default=None, metavar="COL",
+                       help='Initial PCA plot Z-axis column, used when 3D is enabled '
+                            '(default: the third dimension)')
+    parser.add_argument('--pca-3d', action='store_true', default=False,
+                       help='Start the PCA plot in 3D (default: 2D)')
     parser.add_argument('--selectedID', type=str, default=None, required=False, metavar="IDs",
                        help='Which samples start selected: ";"- or ","-separated IDs or '
                             'wildcard patterns (e.g. "S1;S2" or "*.SG"; prefix a token with '
@@ -78,17 +101,23 @@ def create_parser(script_name='Script'):
                             'of using only the annotation file. A column already present in the '
                             'annotation file takes precedence over one of the same name embedded '
                             'in --eigenvec.')
-    parser.add_argument('--annotationID', type=str, default='Genetic ID', metavar="NAME",
+    parser.add_argument('--annotationID', type=str, default='Genetic ID', metavar="COL",
                        help='Annotation ID column (default first column)')
-    parser.add_argument('--longitude', type=str, default=None, metavar="NAME",
+    parser.add_argument('--annotation-columns', type=str, default='', metavar="COLS",
+                       help='Comma-separated annotation columns initially shown in the table/hover '
+                            '(default: the first 10)')
+    parser.add_argument('--longitude', type=str, default=None, metavar="COL",
                        help='Longitude column name')
-    parser.add_argument('--latitude', type=str, default=None, metavar="NAME",
+    parser.add_argument('--latitude', type=str, default=None, metavar="COL",
                        help='Latitude column name')
-    parser.add_argument('--time', type=str, default=None, metavar="NAME",
+    parser.add_argument('--map-type', type=str, choices=['map', 'tiles', 'none'], default='map',
+                       help="Initial map basemap, matching the Basemap dropdown's own options: "
+                            "'map', 'tiles', or 'none' (default: map)")
+    parser.add_argument('--time', type=str, default=None, metavar="COL",
                        help='Time column name')
-    parser.add_argument('--group', type=str, default=None, metavar="NAME",
+    parser.add_argument('--group', type=str, default=None, metavar="COL",
                        help='Grouping/coloring column name')
-    parser.add_argument('--group-shape', type=str, default=None, metavar="NAME",
+    parser.add_argument('--group-shape', type=str, default=None, metavar="COL",
                        help='Grouping/shape column name')
 
     # Text handling
@@ -115,35 +144,58 @@ def create_parser(script_name='Script'):
                             "over the saved one). Created by the app's own 'Save view' "
                             "button (default none)")
     parser.add_argument('--color-schema-continuous', type=str, default='Viridis', metavar="NAME",
+                       choices=_CONTINUOUS_COLORSCALES,
                        help='Color schema for continuous variables (default Viridis)')
     parser.add_argument('--point-color', type=str, default="#000000", metavar="COLOR",
                        help='Default point color for selected points (default #000000)')
     parser.add_argument('--point-color-unselected', type=str, default='#cccccc', metavar="COLOR",
                        help='Default point color for unselected points (default #cccccc)')
-    parser.add_argument('--point-size', type=int, default=8, metavar="N",
+    parser.add_argument('--point-size', type=int, default=8, metavar="N", choices=_POINT_SIZES,
                        help='Default point size (default 8)')
-    parser.add_argument('--point-size-unselected', type=int, default=8, metavar="N",
+    parser.add_argument('--point-size-unselected', type=int, default=8, metavar="N", choices=_POINT_SIZES,
                        help='Default point size for unselected points (default 8)')
     parser.add_argument('--point-opacity', type=float_0_1, default=0.9, metavar="FLOAT",
+                       choices=_POINT_OPACITIES,
                        help='Default opacity (default 0.9)')
     parser.add_argument('--point-opacity-unselected', type=float_0_1, default=0.3, metavar="FLOAT",
+                       choices=_POINT_OPACITIES,
                        help='Default opacity for unselected points (default 0.3)')
     parser.add_argument('--point-symbol', type=str, default='circle', metavar="SYMBOL",
+                       choices=SHAPE_SYMBOLS,
                        help='Default point symbol (default circle)')
     parser.add_argument('--point-symbol-unselected', type=str, default='circle', metavar="SYMBOL",
+                       choices=SHAPE_SYMBOLS,
                        help='Default point symbol for unselected points (default circle)')
 
     # Time figure
-    parser.add_argument('--time-plot-type', type=int, choices=[0, 1, 2], default=0,
-                       help='Time plot type: 0=scatter, 1=histogram with selection, 2=histogram simple')
-    parser.add_argument('--time-hist-nbins', type=int, default=100, metavar="N",
-                       help='Number of bins for the time histogram (100)')
-    parser.add_argument('--time-invert', action='store_true', default=False,
-                       help='Invert time axis (for BP data)')
+    parser.add_argument('--time-viz-mode', type=str,
+                       choices=['scatter', 'violin', 'distribution', 'overlay'], default='scatter',
+                       help="Initial time-plot view mode (default: scatter)")
+    parser.add_argument('--time-group-mode', type=str,
+                       choices=['none', 'group', 'group_named'], default='group',
+                       help="Initial time-plot grouping (Scatter/Violin only): 'none' (one combined "
+                            "strip), 'group' (one per group), 'group_named' (one per group, labelled) "
+                            "(default: group)")
+    parser.add_argument('--time-bin-size', type=float, default=None, metavar="N",
+                       help='Initial time-plot histogram bin width, for Distribution/Overlay '
+                            '(default: ~50 bins across the data range)')
+    parser.add_argument('--time-invert-columns', type=str, default='', metavar="COLS",
+                       help="Comma-separated continuous columns whose time-plot x-axis starts "
+                            "reversed by default (e.g. BP dates) — defaults to just the --time "
+                            "column if omitted; 'Invert' can still be toggled per-column at runtime")
+    parser.add_argument('--time-rotate-columns', type=str, default='', metavar="COLS",
+                       help="Comma-separated continuous columns whose time-plot starts with x/y "
+                            "swapped by default; 'Rotate' can still be toggled per-column at runtime")
 
     # Plot settings
     parser.add_argument('--hover-minimal', action='store_true', default=False,
-                       help='Show minimal information when hovering points')
+                       help='Show minimal information when hovering points '
+                            '(default: detailed)')
+    parser.add_argument('--legend', type=str, choices=['none', 'once', 'everywhere'],
+                       default='once',
+                       help="Legend display mode: 'none' never shows it, 'once' shows it on "
+                            "a single active plot at a time, 'everywhere' shows it on every "
+                            "plot that has one (default: once)")
     parser.add_argument('--open-browser', action='store_true', default=False,
                        help='Open directly the dash server in a web browser')
     parser.add_argument('--server-port', type=int, default=8050, metavar="N",
@@ -155,8 +207,6 @@ def create_parser(script_name='Script'):
     parser.add_argument('--setup', action='store_true', default=False,
                        help='Force the setup loader shell even if data is given '
                             '(used by the Restart button to prefill the loaders)')
-    parser.add_argument('--show-all-legends', action='store_true', default=False,
-                       help='Show the legends in all figures')
 
     return parser
 
