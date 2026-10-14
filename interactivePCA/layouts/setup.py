@@ -486,6 +486,11 @@ def _top_actions():
                       style=_btn_style),
             dbc.Button('Refresh', id='settings-apply-btn', color='primary', size='sm',
                       n_clicks=0, style=_btn_style),
+            # A small spinner right beside the button — same minimal style as
+            # the header's own restart-status, rather than relying solely on
+            # the bigger settings-status alert further down (easy to miss if
+            # the user hasn't scrolled past the top row yet).
+            html.Div(id='settings-apply-status-icon', style={'marginLeft': '8px'}),
         ],
         style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap',
               'justifyContent': 'flex-end'},
@@ -556,12 +561,7 @@ def _column_dropdown_row(dest, args, columns, by):
     after the user clicks Read).
     """
     action = by[dest]
-    # '*' marks every Settings-tab field that needs a Refresh click to take
-    # effect — i.e. everything reaching this row builder, since the fields
-    # that act live instead (_legend_row, _hover_detailed_row, the Panels
-    # visibility checkboxes) never go through it. See settings_panel's own
-    # intro paragraph for where this is explained to the user.
-    label = action.option_strings[0].lstrip('-') + ' *'
+    label = action.option_strings[0].lstrip('-')
     current = _initial(args, dest)
     columns = columns or []
     options = [{'label': c, 'value': c} for c in columns]
@@ -578,22 +578,21 @@ def _column_dropdown_row(dest, args, columns, by):
     )
 
 
-def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotation_table=True,
-                   map_initially_visible=False, time_initially_visible=False,
-                   eigenvec_columns=None, annotation_desc=None):
-    """Settings-tab content: the panel show/hide checkboxes, the Equivalent
-    command generator, then *every* CLI option grouped into bordered category
-    cards, + a Refresh (relaunch) button.
+def settings_panel(args, eigenvec_columns=None, annotation_desc=None):
+    """Settings-tab content: the Equivalent command generator, then *every*
+    CLI option grouped into bordered category cards, + a Refresh (relaunch)
+    button.
 
     Unlike the loader panels — which only exist while their file is missing —
     this lists the file/column parameters too, and it is always present. That
     makes it the one place to change e.g. --latitude/--longitude/--time on an
     app whose data is already loaded.
 
-    show_map_plot/show_time_plot/show_annotation_table: whether each panel's
-    data is loaded at all (so its checkbox is enabled). map_initially_visible/
-    time_initially_visible: whether --latitude/--longitude/--time happened to
-    already resolve, i.e. whether that panel starts out checked.
+    Panels visibility, Legend mode and Hover detailed are NOT here — they act
+    immediately with no relaunch needed, so their one live home is the
+    Visibility popup on the PCA tab (layouts/__init__.py:create_pca_tab,
+    button next to Aesthetics) instead of a second, relaunch-only copy here.
+
     eigenvec_columns/annotation_desc: the already-loaded files' own columns,
     for the eigenvecID/annotationID dropdowns (see _column_dropdown_row).
     """
@@ -610,12 +609,10 @@ def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotatio
     }
 
     def rows(dests):
-        # Strip leading '--' from CLI option names for cleaner display; '*'
-        # marks that this field needs a Refresh click to take effect (see
-        # _column_dropdown_row and the intro paragraph below).
+        # Strip leading '--' from CLI option names for cleaner display.
         return [
             _id_column_rows[d] if d in _id_column_rows else
-            _labeled_row(by[d].option_strings[0].lstrip('-') + ' *',
+            _labeled_row(by[d].option_strings[0].lstrip('-'),
                         _field_component(by[d], args, 'settings-arg'), by[d].help)
             for d in dests if d in by
         ]
@@ -636,23 +633,13 @@ def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotatio
     uncategorized = [d for d in all_arg_names() if d not in categorized]
     assert not uncategorized, f"Uncategorized Settings-tab field(s): {uncategorized}"
 
-    panels_card = dbc.Card([
-        dbc.CardHeader('Panels visibility'),
-        dbc.CardBody(
-            html.Div([
-                _settings_show_checkbox('PCA plot', 'settings2-show-pca', True, True),
-                _settings_show_checkbox('Map', 'settings2-show-map', map_initially_visible, show_map_plot),
-                _settings_show_checkbox('Time plot', 'settings2-show-time', time_initially_visible, show_time_plot),
-                _settings_show_checkbox('Annotation table', 'settings2-show-table', True, show_annotation_table),
-            ], style={'display': 'flex', 'gap': '24px', 'flexWrap': 'wrap', 'alignItems': 'center'}),
-        ),
-    ], className='mb-3')
-
-    # Panels visibility and Aesthetics are each the first card of their own
-    # column, so they land on the same row (alignItems: 'flex-start' on the
-    # [left_column, right_column] row below) without any extra positioning.
+    # Eigenvector file is the first card of its own column, Aesthetics the
+    # first of the other, so they land on the same row (alignItems:
+    # 'flex-start' on the [left_column, right_column] row below) without any
+    # extra positioning. (Panels visibility used to be here too — it, Legend
+    # mode and Hover detailed now live solely in the PCA tab's Visibility
+    # popup, see settings_panel's own docstring.)
     left_column = html.Div([
-        panels_card,
         section('Eigenvector file', _SETTINGS_EIGENVEC_FIELDS),
         section('Annotation file', _SETTINGS_ANNOTATION_FIELDS),
         section('Session file', _SETTINGS_SESSION_FIELDS),
@@ -661,9 +648,7 @@ def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotatio
     right_column = html.Div([
         dbc.Card([
             dbc.CardHeader('Aesthetics'),
-            dbc.CardBody(
-                [_legend_row(args), _hover_detailed_row(args)] + rows(_SETTINGS_AESTHETICS_FIELDS)
-            ),
+            dbc.CardBody(rows(_SETTINGS_AESTHETICS_FIELDS)),
         ], className='mb-3'),
         section('Server', _SETTINGS_SERVER_FIELDS),
     ], style={'flex': '1 1 0', 'minWidth': '0'})
@@ -685,9 +670,9 @@ def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotatio
                               'flexWrap': 'wrap', 'gap': '12px', 'paddingLeft': '1rem', 'paddingRight': '1rem'},
                     ),
                     html.P('Every parameter, including those set while loading. '
-                           'Fields marked * only take effect after clicking Refresh '
-                           '(relaunches with the current values); the rest '
-                           '(Legend, Hover detailed, Panels visibility) act immediately.',
+                           'Click Refresh to relaunch with the current values. '
+                           'Panels visibility, Legend mode and Hover detailed act '
+                           'immediately instead — see the Visibility button on the PCA tab.',
                            className='text-muted', style={'paddingLeft': '1rem'}),
                     # Right by Refresh (top of the tab, see _top_actions) rather
                     # than at the very bottom — the "Starting…" spinner it shows

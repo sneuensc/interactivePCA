@@ -34,6 +34,9 @@ from .setup import (
     settings_panel,
     file_browser_modal,
     setup_stores,
+    _settings_show_checkbox,
+    _legend_row,
+    _hover_detailed_row,
 )
 from ..about import version_info
 
@@ -220,6 +223,7 @@ def create_layout(args, df, pcs,
             init_3d=getattr(args, 'pca_3d', False),
             init_time_group_mode=getattr(args, 'time_group_mode', 'group'),
             init_map_type=getattr(args, 'map_type', 'map'),
+            args=args,
         ) if df is not None else eigenvec_loader_panel(args)
     })
 
@@ -267,12 +271,7 @@ def create_layout(args, df, pcs,
         'label': 'Settings',
         'value': 'settings_tab',
         'content': settings_panel(
-            args, show_map_plot=show_map_plot, show_time_plot=show_time_plot,
-            show_annotation_table=annotation_desc is not None,
-            map_initially_visible=map_initially_visible,
-            time_initially_visible=time_initially_visible,
-            eigenvec_columns=eigenvec_columns,
-            annotation_desc=annotation_desc,
+            args, eigenvec_columns=eigenvec_columns, annotation_desc=annotation_desc,
         )
     })
 
@@ -789,7 +788,8 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
                    time_invert_columns=frozenset(), init_pc_x=None, init_pc_y=None,
                    init_time_viz_mode='scatter', init_time_bin_size=None,
                    time_rotate_columns=frozenset(), init_pc_z=None,
-                   init_3d=False, init_time_group_mode='group', init_map_type='map'):
+                   init_3d=False, init_time_group_mode='group', init_map_type='map',
+                   args=None):
     """Create PCA tab layout with map on the right and extra panels below."""
     # Determine if legend should be shown initially (only if group has multiple
     # unique values and --legend doesn't start out suppressing it entirely —
@@ -897,10 +897,16 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
     
     # Control section (grouping + selection actions — axis controls live above the PCA plot)
     control_section = html.Div([
-        # Left side controls — same bordered "notch" box pattern as the
-        # Selection box on the right (see its own comment below for why a
-        # plain Div + absolutely-positioned title is used instead of
-        # html.Fieldset/Legend).
+        # Left side: the Grouping/coloring frame plus the Visibility button
+        # right after it (not inside it — unrelated to that frame's own
+        # Color by/Shape by/Aesthetics) — wrapped together so control_section's
+        # own justifyContent:'space-between' below treats this pair as one
+        # group against the Selection box on the right, instead of centering
+        # the button in the gap between them.
+        html.Div([
+        # Same bordered "notch" box pattern as the Selection box on the right
+        # (see its own comment below for why a plain Div + absolutely-
+        # positioned title is used instead of html.Fieldset/Legend).
         html.Div([
             html.Span('Grouping / coloring', style={
                 'position': 'absolute', 'top': '-9px', 'left': '10px',
@@ -944,6 +950,25 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             'position': 'relative', 'border': '1px solid #ccc', 'borderRadius': '4px',
             'padding': '10px 12px 8px', 'margin': '0', 'marginTop': '8px'
         }),
+
+            # Not part of the Grouping/coloring frame — it opens panel-
+            # visibility controls (which plots exist at all), unrelated to
+            # that frame's own Color by/Shape by/Aesthetics. A plain sibling
+            # button right after the frame, not inside it.
+            html.Button(
+                'Visibility',
+                id='open-visibility',
+                style={
+                    'padding': '6px 12px',
+                    'border': '1px solid #ccc',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#ffffff',
+                    'cursor': 'pointer',
+                    'alignSelf': 'center',
+                    'marginTop': '8px',
+                }
+            ),
+        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
 
         # Right side controls
         # A plain bordered box with the title overlapping the top border,
@@ -1713,6 +1738,65 @@ def create_pca_tab(pcs, dropdown_group_list, init_group, ANNOTATION_TIME, ANNOTA
             },
         ),
         dcc.Download(id='download-aesthetics'),
+        # Small popup (not draggable — short enough it never needs moving;
+        # reuses the same .draggable-panel/.panel-open show/hide mechanism as
+        # aesthetics-modal above) holding the three controls that act
+        # immediately with no Refresh/relaunch: which panels are shown, the
+        # Legend mode, and Hover detailed. These used to be duplicated as a
+        # second, relaunch-only copy in Settings; now this is their one home
+        # (see layouts/setup.py:settings_panel's own docstring).
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.Span("Visibility", style={'fontWeight': 'bold', 'fontSize': '16px'}),
+                        html.Button(
+                            '✕', id='visibility-modal-close-x', n_clicks=0,
+                            title='Close',
+                            style={
+                                'border': 'none', 'background': 'none', 'fontSize': '18px',
+                                'lineHeight': '1', 'padding': '4px 8px', 'cursor': 'pointer',
+                                'color': '#666',
+                            }
+                        ),
+                    ],
+                    style={
+                        'padding': '10px 16px',
+                        'backgroundColor': '#f8f9fa', 'borderBottom': '1px solid #dee2e6',
+                        'borderRadius': '6px 6px 0 0', 'display': 'flex',
+                        'justifyContent': 'space-between', 'alignItems': 'center',
+                        'flex': '0 0 auto',
+                    },
+                ),
+                html.Div(
+                    [
+                        html.Div([
+                            html.Label('Panels visibility', style={'fontWeight': 500, 'marginBottom': '6px'}),
+                            html.Div([
+                                _settings_show_checkbox('PCA plot', 'settings2-show-pca', True, True),
+                                _settings_show_checkbox('Map', 'settings2-show-map',
+                                                        map_initially_visible, annotation_desc is not None),
+                                _settings_show_checkbox('Time plot', 'settings2-show-time',
+                                                        time_initially_visible, annotation_desc is not None),
+                                _settings_show_checkbox('Annotation table', 'settings2-show-table',
+                                                        True, annotation_desc is not None),
+                            ], style={'display': 'flex', 'gap': '20px', 'flexWrap': 'wrap', 'alignItems': 'center'}),
+                        ], style={'marginBottom': '16px'}),
+                        _legend_row(args),
+                        _hover_detailed_row(args),
+                    ],
+                    style={'padding': '16px', 'flex': '1 1 auto'},
+                ),
+            ],
+            id='visibility-modal',
+            className='draggable-panel',
+            style={
+                'position': 'fixed', 'top': '80px', 'left': '50%',
+                'transform': 'translateX(-50%)', 'width': 'min(480px, 90vw)',
+                'flexDirection': 'column', 'backgroundColor': 'white', 'borderRadius': '6px',
+                'boxShadow': '0 4px 24px rgba(0,0,0,0.3)', 'zIndex': 1050,
+            },
+        ),
         html.Div(
             id='pca-plots-container',
             children=(

@@ -725,6 +725,7 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
     @app.callback(
         Output('relaunch-store', 'data', allow_duplicate=True),
         Output('settings-status', 'children'),
+        Output('settings-apply-status-icon', 'children'),
         Input('settings-apply-btn', 'n_clicks'),
         *_SETTINGS_STATE,
         prevent_initial_call=True,
@@ -733,7 +734,8 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
         # Settings owns every parameter, so Refresh relaunches with exactly what
         # the tab shows — a field cleared here is dropped from the command line.
         port = _relaunch_from(args, _dom(values, ids), all_arg_names())
-        return {'go': True, 'port': port}, _starting_alert()
+        icon = html.Span(dbc.Spinner(size='sm', color='primary'), title='Refreshing…')
+        return {'go': True, 'port': port}, _starting_alert(), icon
 
     # ── About dialog (always) ────────────────────────────────────────────────
     # Clientside: opening a static dialog needs no round trip to the server.

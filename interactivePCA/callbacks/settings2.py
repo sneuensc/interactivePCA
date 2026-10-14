@@ -264,6 +264,22 @@ def register_settings2_callbacks(app, args, show_map_plot=True, show_time_plot=T
     _register_legend_target(app, show_time_plot, show_map_plot)
     _register_command_generator(app, args, show_map_plot, show_time_plot)
 
+    # Open/close the Visibility popup (layouts/__init__.py:create_pca_tab,
+    # button next to Aesthetics) — same className-based show/hide as the
+    # Aesthetics modal (callbacks/aesthetics.py:toggle_aesthetics_modal),
+    # just without drag support (short enough it never needs moving).
+    @app.callback(
+        Output('visibility-modal', 'className'),
+        [Input('open-visibility', 'n_clicks'), Input('visibility-modal-close-x', 'n_clicks')],
+        [State('visibility-modal', 'className')],
+        prevent_initial_call=True,
+    )
+    def toggle_visibility_modal(n_open, n_close, class_name):
+        if n_open or n_close:
+            is_open = bool(class_name and 'panel-open' in class_name)
+            return 'draggable-panel' if is_open else 'draggable-panel panel-open'
+        return class_name
+
     # Left pane: PCA plot <-> time plot.
     if show_time_plot:
         pca_pct = int(LAYOUT_CONFIG['pca_time_split'] * 100)

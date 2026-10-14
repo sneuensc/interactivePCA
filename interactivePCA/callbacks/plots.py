@@ -486,17 +486,21 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             if time_variable is None or time_variable not in df.columns:
                 return {}
 
-            # The group-colour legend only ever shows on ONE active plot at a
-            # time (see legend-target-store / callbacks/settings2.py's
+            # The group-colour legend (or, for a continuous Color-by, the
+            # colorbar in Scatter view) only ever shows on ONE active plot at
+            # a time (see legend-target-store / callbacks/settings2.py's
             # _register_legend_target) — this relocates it here when the PCA
             # plot (its usual home) is hidden. The Settings tab's Legend mode
             # overrides that: 'none' suppresses it everywhere, 'everywhere'
             # bypasses the relocation and shows it here regardless, 'once' is
-            # the relocating default above. Only meaningful in the two view
-            # modes that actually draw one trace per category (scatter's "per
-            # group" mode, violin's per-group mode); _has_category_legend
-            # below tracks whether either used it.
+            # the relocating default above — matching the PCA/map plots'
+            # own treatment (update_pca_plot_structure/update_map_plot). The
+            # categorical case is only meaningful in the two view modes that
+            # actually draw one trace per category (scatter's "per group"
+            # mode, violin's per-group mode); _has_category_legend below
+            # tracks whether either used it.
             is_categorical_group = group != 'none' and group in df.columns and df[group].dtype.kind not in 'fi'
+            is_continuous_group = group != 'none' and group in df.columns and df[group].dtype.kind in 'fi'
             if legend_mode == 'none':
                 is_time_legend_target = False
             elif legend_mode == 'everywhere':
@@ -506,6 +510,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             show_legend_here = bool(
                 is_time_legend_target and is_categorical_group and df[group].nunique() > 1
             )
+            show_colorbar_here = bool(is_time_legend_target and is_continuous_group)
             _has_category_legend = False
 
             time_vals = df[time_variable].dropna()
@@ -574,7 +579,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                             size=default_size,
                             opacity=default_opacity,
                             symbol=aesthetics['symbol'].get('default', 'circle'),
-                            showscale=False
+                            showscale=show_colorbar_here,
+                            colorbar=dict(title=group) if show_colorbar_here else None,
                         )
                         _lc = line_color_map.get('default')
                         if _lc:
@@ -701,12 +707,16 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                         margin=dict(l=50, r=20, t=40, b=40),
                     )
                 else:
+                    # Reserve room on the right for the colorbar (continuous
+                    # group, Scatter view) when it's actually being drawn —
+                    # same reasoning as the PCA plot's own any_legend margin.
+                    _r_margin = 80 if (show_colorbar_here and is_continuous_group) else 20
                     fig.update_layout(
                         xaxis_title=time_variable,
                         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
                         autosize=True,
                         dragmode='lasso',
-                        margin=dict(l=50, r=20, t=40, b=40)
+                        margin=dict(l=50, r=_r_margin, t=40, b=40)
                     )
 
             elif viz_mode == 'violin':
