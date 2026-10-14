@@ -271,7 +271,11 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
             Output({'type': 'setup-arg', 'name': 'dim'}, 'value'),
             Output('eigenvec-read-status', 'children'),
             Output('eigenvec-details', 'style'),
-            Output('embedded-annotation-section', 'style'),
+            # className, not style: embedded-annotation-section carries Bootstrap's
+            # `.d-flex` utility class (display: flex !important), which beats a
+            # plain inline style — toggling the className itself (to `.d-none`,
+            # same !important weight) is the only reliable way to hide/show it.
+            Output('embedded-annotation-section', 'className'),
             Output('session-load-section', 'style'),
             Output('use-file-annotation-btn', 'children', allow_duplicate=True),
             Input('read-eigenvec-btn', 'n_clicks'),
@@ -363,7 +367,7 @@ def register_setup_callbacks(app, args, show_eigenvec_loader, show_annotation_lo
                                      else 'Read')
             return (options, id_col, dim_value,
                     dbc.Alert(status_msg, color='success'), {},
-                    {} if n_annotations > 0 else {'display': 'none'},
+                    'd-flex flex-wrap' if n_annotations > 0 else 'd-none',
                     {'display': 'none'}, file_annotation_label)
 
         @app.callback(

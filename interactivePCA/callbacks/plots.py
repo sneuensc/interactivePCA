@@ -94,15 +94,14 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             and df[group].dtype.kind in 'fi'
         )
 
-        # The group-colour legend only ever shows on ONE active plot at a time
-        # (see legend-target-store / callbacks/settings2.py:_register_legend_target)
+        # The group-colour legend (or, for a continuous Color-by, the
+        # colorbar) only ever shows on ONE active plot at a time (see
+        # legend-target-store / callbacks/settings2.py:_register_legend_target)
         # — normally this one, but it relocates to the time or map plot if
         # this one is hidden. The Settings tab's Legend mode
         # (settings2-legend-mode) overrides that: 'none' suppresses it
         # everywhere, 'everywhere' bypasses the relocation and shows it on
         # every active plot at once, 'once' is the relocating default above.
-        # The continuous colourbar is a separate, always-local concept (not
-        # "the legend" being relocated), so it is not gated on this either way.
         if legend_mode == 'none':
             is_legend_target = False
         elif legend_mode == 'everywhere':
@@ -113,7 +112,7 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
         if is_categorical:
             show_legend = df[group].nunique() > 1 and is_legend_target
         elif is_continuous:
-            show_legend = True
+            show_legend = is_legend_target
 
         # Create 3D or 2D plot based on toggle
         if 'enable_3d' in is_3d:
@@ -180,7 +179,8 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             gs and sym_aest and gs in df.columns and df[gs].dtype.kind not in 'fi'
         )
         has_color_legend = bool(is_categorical and show_legend)
-        any_legend = has_color_legend or has_shape_legend or is_continuous
+        has_colorbar = bool(is_continuous and show_legend)
+        any_legend = has_color_legend or has_shape_legend or has_colorbar
         _r_margin = 170 if any_legend else 20
 
         # When both sections are present, use grouped ordering with per-section
@@ -358,16 +358,15 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
                 and group in df.columns
                 and df[group].dtype.kind in 'fi'
             )
-            # The group-colour legend (categorical case) only ever shows on
-            # ONE active plot at a time — this one when legend-target-store
-            # points here (PCA, and possibly time, hidden — see
-            # callbacks/settings2.py:_register_legend_target). The Settings
-            # tab's Legend mode overrides that: 'none' suppresses it
-            # everywhere, 'everywhere' bypasses the relocation and shows it
-            # here regardless, 'once' is the relocating default above. The
-            # continuous colourbar is a separate, always-local concept
-            # (matching the PCA plot's own treatment) rather than something
-            # being relocated, so it is not gated on legend_target either way.
+            # The group-colour legend (or, for a continuous Color-by, the
+            # colorbar) only ever shows on ONE active plot at a time — this
+            # one when legend-target-store points here (PCA, and possibly
+            # time, hidden — see callbacks/settings2.py:_register_legend_target).
+            # The Settings tab's Legend mode overrides that: 'none' suppresses
+            # it everywhere, 'everywhere' bypasses the relocation and shows it
+            # here regardless, 'once' is the relocating default above —
+            # matching the PCA plot's own treatment (update_pca_plot_structure),
+            # so a continuous colorbar never shows on both PCA and map at once.
             if legend_mode == 'none':
                 is_map_legend_target = False
             elif legend_mode == 'everywhere':
@@ -375,8 +374,9 @@ def register_plot_callbacks(app, args, df, ANNOTATION_LAT, ANNOTATION_LONG, ANNO
             else:
                 is_map_legend_target = legend_target == 'map'
             show_legend_here = bool(
-                is_continuous
-                or (is_map_legend_target and is_categorical and df[group].nunique() > 1)
+                is_map_legend_target and (
+                    is_continuous or (is_categorical and df[group].nunique() > 1)
+                )
             )
             # 'tiles' → interactive Scattermap basemap; 'none' → the same
             # Scattergeo projection with every basemap layer switched off

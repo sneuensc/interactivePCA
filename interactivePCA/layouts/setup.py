@@ -370,8 +370,11 @@ def annotation_loader_panel(args, show_embedded_option=False, has_embedded_annot
                        n_clicks=0, className='me-2 mb-2'),
         ],
         id='embedded-annotation-section',
-        className='d-flex flex-wrap',
-        style={} if has_embedded_annotation_cols else {'display': 'none'},
+        # Bootstrap's `.d-flex` utility class sets `display: flex !important` —
+        # that !important beats a plain inline `style={'display': 'none'}`, so
+        # hiding this has to swap the className itself (to `.d-none`, which
+        # carries its own !important) rather than fight it via style.
+        className='d-flex flex-wrap' if has_embedded_annotation_cols else 'd-none',
     )
     file_help = ('Type a server-side path, or Browse. Only needed for "Use annotation '
                 'from extra file" or "Combine…" below.')
@@ -553,7 +556,12 @@ def _column_dropdown_row(dest, args, columns, by):
     after the user clicks Read).
     """
     action = by[dest]
-    label = action.option_strings[0].lstrip('-')
+    # '*' marks every Settings-tab field that needs a Refresh click to take
+    # effect — i.e. everything reaching this row builder, since the fields
+    # that act live instead (_legend_row, _hover_detailed_row, the Panels
+    # visibility checkboxes) never go through it. See settings_panel's own
+    # intro paragraph for where this is explained to the user.
+    label = action.option_strings[0].lstrip('-') + ' *'
     current = _initial(args, dest)
     columns = columns or []
     options = [{'label': c, 'value': c} for c in columns]
@@ -602,10 +610,12 @@ def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotatio
     }
 
     def rows(dests):
-        # Strip leading '--' from CLI option names for cleaner display.
+        # Strip leading '--' from CLI option names for cleaner display; '*'
+        # marks that this field needs a Refresh click to take effect (see
+        # _column_dropdown_row and the intro paragraph below).
         return [
             _id_column_rows[d] if d in _id_column_rows else
-            _labeled_row(by[d].option_strings[0].lstrip('-'),
+            _labeled_row(by[d].option_strings[0].lstrip('-') + ' *',
                         _field_component(by[d], args, 'settings-arg'), by[d].help)
             for d in dests if d in by
         ]
@@ -675,7 +685,9 @@ def settings_panel(args, show_map_plot=True, show_time_plot=True, show_annotatio
                               'flexWrap': 'wrap', 'gap': '12px', 'paddingLeft': '1rem', 'paddingRight': '1rem'},
                     ),
                     html.P('Every parameter, including those set while loading. '
-                           'Click Refresh to relaunch with the current values.',
+                           'Fields marked * only take effect after clicking Refresh '
+                           '(relaunches with the current values); the rest '
+                           '(Legend, Hover detailed, Panels visibility) act immediately.',
                            className='text-muted', style={'paddingLeft': '1rem'}),
                     # Right by Refresh (top of the tab, see _top_actions) rather
                     # than at the very bottom — the "Starting…" spinner it shows
